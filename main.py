@@ -1,93 +1,262 @@
-from datetime import datetime, timezone, timedelta, time
+import logging
+from datetime import datetime, time, timedelta, timezone
+from typing import TYPE_CHECKING
 
-from PIL import Image
 import piexif
+from genutility.compat.os import fspath
+from genutility.pillow import NoActionNeeded, fix_orientation, write_text
+from PIL import Image
 
-from genutility.pillow import fix_orientation, write_text, NoActionNeeded
+if TYPE_CHECKING:
+	from typing import Any, Dict, Iterable, Tuple
 
-def get_original_date(exif, offset=8):
-	# type: (dict, int) -> datetime
+	from genutility.compat.pathlib import Path
 
-	""" Returns the original picture date from exif date.
-		Input:
-			`exit`: piexif exit_dict
-			`offset`: timezone offset in hours
-	"""
-
-	try:
-		datestamp = exif["GPS"][piexif.GPSIFD.GPSDateStamp].decode("ascii")
-		timestamp = exif["GPS"][piexif.GPSIFD.GPSTimeStamp]
-		_date = datetime.strptime(datestamp, "%Y:%m:%d")
-		(h, hd), (m, md), (s, sd) = timestamp
-		assert hd == 1 and md == 1
-		s, ms = divmod(s, sd)
-		_time = time(h, m, s, ms*1000)
-		dt = datetime.combine(_date, _time, timezone.utc)
-		return dt.astimezone(timezone(timedelta(hours=offset)))
-
-	except KeyError:
-		pass
-
-	original = exif["Exif"][piexif.ExifIFD.DateTimeOriginal].decode("ascii")
-	dt = datetime.strptime(original, "%Y:%m:%d %H:%M:%S") # local time
-	return dt.astimezone(timezone(timedelta(hours=offset)))
-
-def center_by_topleft(tl_1, size_1, size_2):
-	center_1 = (tl_1[0] + size_1[0] / 2, tl_1[1] + size_1[1] / 2)
-	tl_2 = (center_1[0] - size_2[0] / 2, center_1[1] - size_2[1] / 2)
-	return tl_2
+logger = logging.getLogger(__name__)
 
 class NoDateFound(Exception):
 	pass
 
-def save_with_date(inpath, outpath, align="BR", fillcolor="white", outlinecolor="black", fontratio=0.03, quality=90):
-	# type: (Path, Path, str, str, str, float, int) -> None
+class RotateFailed(Exception):
+	pass
 
-	assert not outpath.exists()
+def dt_gps_from_exif(exif):
+	# type: (dict, ) -> datetime
 
-	image = Image.open(str(inpath))
+	try:
+		datestamp = exif["GPS"][piexif.GPSIFD.GPSDateStamp].decode("ascii")
+		timestamp = exif["GPS"][piexif.GPSIFD.GPSTimeStamp]
+	except KeyError:
+		raise NoDateFound()
+	except UnicodeDecodeError:
+		raise
+
+	_date = datetime.strptime(datestamp, "%Y:%m:%d")
+	(h, hd), (m, md), (s, sd) = timestamp
+	assert hd == 1 and md == 1
+	s, ms = divmod(s, sd)
+	_time = time(h, m, s, ms*1000)
+
+	return datetime.combine(_date, _time, timezone.utc)
+
+def dt_orignal_from_exif(exif):
+	# type: (dict, ) -> datetime
+
+	try:
+		datestr = exif["Exif"][piexif.ExifIFD.DateTimeOriginal].decode("ascii")
+	except KeyError:
+		raise NoDateFound()
+	except UnicodeDecodeError:
+		raise
+
+	return datetime.strptime(datestr, "%Y:%m:%d %H:%M:%S") # local time
+
+
+def dt_digitized_from_exif(exif):
+	# type: (dict, ) -> datetime
+
+	try:
+		datestr = exif["Exif"][piexif.ExifIFD.DateTimeDigitized].decode("ascii")
+	except KeyError:
+		raise NoDateFound()
+	except UnicodeDecodeError:
+		raise
+
+	return datetime.strptime(datestr, "%Y:%m:%d %H:%M:%S") # local time
+
+
+def get_original_date(exif, aslocal=True, sources=("exif-original", "exif-digitized", "gps")):
+	# type: (dict, bool, Iterable[str]) -> datetime
+
+	""" Returns the original picture date from exif date or raises `NoDateFound`.
+
+		Input:
+			`exif`: piexif exif info
+			`offset`: timezone offset in hours
+	"""
+
+	sourcemap = {
+		"exif-original": dt_orignal_from_exif,
+		"exif-digitized": dt_digitized_from_exif,
+		"gps": dt_gps_from_exif
+	}
+
+	for s in sources:
+		func = sourcemap[s]
+		try:
+			dt = func(exif)
+			break
+		except NoDateFound:
+			pass
+	else:
+		raise NoDateFound()
+
+	if aslocal:
+		return dt.astimezone(None)
+	else:
+		return dt
+
+def add_date(image, align="BR", fontsize=0.03, padding=0.01, fillcolor="white", outlinecolor="black"):
+	# type: (Image, str, float, float, str, str) -> Tuple[Image, Dict[str, Any]]
+
 	try:
 		exif = piexif.load(image.info["exif"])
-		try:
-			dt = get_original_date(exif).date()
-		except KeyError:
-			raise NoDateFound()
+	except KeyError as e:
+		raise NoDateFound()
 
-		try:
-			image, exif = fix_orientation(image, exif)
-		except NoActionNeeded:
-			pass
+	dt = get_original_date(exif).date()
 
-		write_text(image, dt.isoformat(), align, fillcolor, outlinecolor, fontratio, padding=(10, 10))
-		kwargs = {
-			"quality": quality,
-			"optimize": True,
-			"progressive": image.info.get("progression", False),
-			"icc_profile": image.info.get("icc_profile"),
-			"exif": piexif.dump(exif), 
-		}
-		image.save(str(outpath), **kwargs)
+	try:
+		image = fix_orientation(image, exif)
+	except NoActionNeeded:
+		pass
+
+	write_text(image, dt.isoformat(), align, fillcolor, outlinecolor, fontsize, padding)
+	kwargs = {
+		"exif": piexif.dump(exif),
+	}
+
+	return image, kwargs
+
+def mod_image(inpath, outpath, args, quality=90, move=None):
+	# type: (Path, Path, Any, int, Optional[str]) -> bool
+
+	if inpath.resolve() == outpath.resolve():
+		raise ValueError("inpath cannot be equal to output")
+
+	image = Image.open(fspath(inpath))
+	kwargs = {
+		"quality": quality,
+		"optimize": True,
+		"progressive": image.info.get("progression", False),
+		"icc_profile": image.info.get("icc_profile"),
+		"exif": image.info.get("exif"),
+	}
+	modified = False
+
+	try:
+
+		if args.resize:
+			image.thumbnail(args.maxsize, reducing_gap=None)  # inplace
+			modified = True
+
+		if args.add_date: # implies rotate
+
+			image, kwargs = add_date(image, args.align, args.fontsize, args.padding, args.fill, args.outline)
+			kwargs.update(kwargs)
+			modified = True
+
+		elif args.rotate:
+
+			# warning: this is not lossless
+
+			try:
+				exif = piexif.load(kwargs["exif"])
+			except KeyError as e:
+				raise RotateFailed()
+
+			try:
+				image = fix_orientation(image, exif)
+				kwargs.update({
+					"exif": piexif.dump(exif),
+				})
+				modified = True
+			except ValueError:
+				raise RotateFailed()
+			except NoActionNeeded:
+				pass
+		
+		if not modified:
+			return False
+
+		image.save(fspath(outpath), **kwargs)
 
 	finally:
 		image.close()
 
+	if move:
+		if outpath.exists():
+			destdir = inpath.parent / move
+			destfile = destdir / inpath.name
+			if destfile.exists():
+				logger.error("Cannot move %s to %s. Destination already exists.", inpath, destfile)
+			else:
+				destdir.mkdir(exist_ok=True)
+				inpath.rename(destfile)
+		else:
+			logger.critical("Bad error! Save succeeded, but %s doesn't exist", outpath)
+
+	return True
+
+
 if __name__ == "__main__":
-	from pathlib import Path
-	from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+	from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+
+	from genutility.args import is_dir
+
+	SUBDIR = "pp-complete"
 
 	parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-	parser.add_argument("path", help="directory with .jpg files")
-	parser.add_argument("--align", choices=("TL", "TC", "TR", "BL", "BC", "BR"), default="BR", help="The corner alignment of the date string. TL is top left, BC is bottom center, and so on.")
-	parser.add_argument("--quality", default=90, help="JPEG quality level")
-	parser.add_argument("--fill", default="white", help="Font fill color")
-	parser.add_argument("--outline", default="black", help="Font outline color")
-	parser.add_argument("--ratio", default=0.03, type=float, help="Fontsize ratio in percent of the image height")
+	parser.add_argument("path", type=is_dir, help="Directory with .jpg files")
+
+	parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively")
+	parser.add_argument("-q", "--quality", type=int, default=90, help="JPEG quality level")
+	parser.add_argument("--move", type=str, help="Move original files to this subdirectory after processing.")
+
+	# actions
+	parser.add_argument("--resize", action="store_true", help="Downsize image.")
+	parser.add_argument("--add-date", action="store_true", help="Add date string to image. Implies --rotate.")
+	parser.add_argument("--rotate", action="store_true", help="Rotate image according on exif info.")
+
+	ALIGN_DEFAULT = "BR"
+	FONTSIZE_DEFAULT = 0.03
+	PADDING_DEFAULT = 0.01
+	FILL_DEFAULT = "white"
+	OUTLINE_DEFAULT = "black"
+
+	parser.add_argument("-a", "--align", choices=("TL", "TC", "TR", "BL", "BC", "BR"), default=ALIGN_DEFAULT, help="The corner alignment of the date string. TL is top left, BC is bottom center, and so on.")
+	parser.add_argument("-p", "--fontsize", type=float, default=FONTSIZE_DEFAULT, help="Fontsize ratio relative to the image height")
+	parser.add_argument("--padding", type=float, default=PADDING_DEFAULT, help="Padding ratio relative to the image size")
+	parser.add_argument("--fill", default=FILL_DEFAULT, help="Font fill color")
+	parser.add_argument("--outline", default=OUTLINE_DEFAULT, help="Font outline color")
+	parser.add_argument("--maxsize", metavar=("W", "H"), nargs=2, type=int, help="Downsize so the images dimensions don't exceed W x H")
 	args = parser.parse_args()
 
-	for entry in Path(args.path).glob("*.jpg"):
-		try:
-			outpath = entry.with_suffix(".withdate.jpg")
-			save_with_date(entry, outpath, align=args.align, quality=args.quality)
-			print("Saved", outpath)
-		except NoDateFound:
-			print("No date found for", entry)
+	if args.maxsize and not args.resize:
+		parser.error("--maxsize needs --resize")
+
+	if (args.align != ALIGN_DEFAULT or args.fontsize != FONTSIZE_DEFAULT or args.padding != PADDING_DEFAULT or args.fill != FILL_DEFAULT or args.outline != OUTLINE_DEFAULT) and not args.add_date:
+		parser.error("--add-date needed")
+
+	logger.setLevel(logging.INFO)
+	handler = logging.StreamHandler()
+	handler.setLevel(logging.INFO)
+	formatter = logging.Formatter("%(levelname)s: %(message)s")
+	handler.setFormatter(formatter)
+	logger.addHandler(handler)
+
+	if args.recursive:
+		it = args.path.rglob("*.jpg")
+	else:
+		it = args.path.glob("*.jpg")
+
+	suffix = ".pp.jpg"
+
+	for entry in it:
+		outpath = entry.with_suffix(suffix)
+
+		if outpath.exists() or fspath(entry).endswith(suffix):
+			logger.warning("Skipping %s (already exists)", entry)
+		else:
+			try:
+				if mod_image(entry, outpath, args, args.quality, args.move):
+					logger.info("Saved %s", outpath)
+				else:
+					logger.info("Unmodified %s", outpath)
+
+			except NoDateFound:
+				logger.warning("No date found for %s", entry)
+			except RotateFailed:
+				logger.warning("Could not auto-rotate %s", entry)
+			except Exception:
+				logger.exception("Processing %s failed", entry)
