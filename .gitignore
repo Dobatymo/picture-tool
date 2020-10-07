@@ -3,7 +3,11 @@
 # python stuff
 __pycache__/
 *.py[cod]
+*.pyz
 *.egg-info
 build/
 dist/
 .mypy_cache/
+
+# binaries
+dist-dlib/
