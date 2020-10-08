@@ -1,39 +1,13 @@
 from os import fspath
-import signal
 from pathlib import Path
 import logging
-from multiprocessing import Pool
+import os, threading
 
 import face_recognition
 import cv2
 from genutility.pickle import read_pickle, write_pickle
+from genutility.concurrency import parallel_map
 import dlib
-
-#from multiprocessing import BoundedSemaphore
-from threading import BoundedSemaphore
-
-import os, threading
-class SemaphoreBoundedQueue(object):
-
-	# similar: pip install bounded-iterator
-
-	""" To be used with `multiprocessing.Pool`.
-		`imap()` calls iterable from same process but different thread.
-	"""
-
-	def __init__(self, size, it):
-		self.semaphore = BoundedSemaphore(size)
-		self.it = iter(it)
-
-	def __iter__(self):
-		return self
-
-	def __next__(self):
-		self.semaphore.acquire()
-		return next(self.it)
-
-	def done(self):
-		self.semaphore.release()
 
 class PictureWindow(object):
 
@@ -135,31 +109,16 @@ def get_features(entry):
 
 	return entry, images, encodings
 
-def init_worker():
-	signal.signal(signal.SIGINT, signal.SIG_IGN)
+def get_faces(paths):
+	# type: (Iterable[DirEntry]) -> Iterator[Tuple[DirEntry, np.ndarray, np.ndarray]]
 
-def get_faces(paths, parallel=True, processes=None, bufsize=1, chunksize=1):
-	# type: (Iterable[DirEntry], bool) -> Iterator[Tuple[DirEntry, np.ndarray, np.ndarray]]
-
-	if parallel:
-
-		q = SemaphoreBoundedQueue(bufsize, paths)
-
-		with Pool(processes, init_worker) as p:
-			try:
-				for entry, images, encodings in p.imap(get_features, q, chunksize=1):
-					for img, enc in zip(images, encodings):
-						yield entry, img, enc
-					q.done()
-			except KeyboardInterrupt:
-				print("Face analysis interrupted")
-				raise
-
-	else:
-		for entry in paths:
-			entry, images, encodings = get_features(entry)
+	try:
+		for entry, images, encodings in parallel_map(get_features, paths, bufsize=100):
 			for img, enc in zip(images, encodings):
 				yield entry, img, enc
+	except KeyboardInterrupt:
+		print("Face analysis interrupted")
+		raise
 
 def label(paths, db, strict_bound, suggest_bound):
 	# type: (Iterable[DirEntry], FaceStorage) -> None
@@ -174,7 +133,7 @@ def label(paths, db, strict_bound, suggest_bound):
 
 			foundnames = {db.names[i] for i in sure}
 			if len(foundnames) == 1:
-				print(f"Found {foundnames.pop()}")
+				print(f"{entry.name} - Found: {foundnames.pop()}")
 				continue
 			elif len(foundnames) > 1:
 				pass
@@ -182,10 +141,11 @@ def label(paths, db, strict_bound, suggest_bound):
 				foundnames = {db.names[i] for i, d in suggest}
 
 			if foundnames:
-				print(foundnames)
+				foundnames = ", ".join(foundnames)
+				print(f"{entry.name} - Matches: {foundnames}")
 
 			win.show(img, from_="BGR")
-			name = input("Name:")
+			name = input(f"{entry.name} - Name: ")
 
 			db.add(entry, enc, name)
 
@@ -204,7 +164,13 @@ if __name__ == "__main__":
 	parser.add_argument("--suggest", type=float, default=DEFAULT_SUGGEST_BOUND)
 	parser.add_argument("--faces-db", type=Path, default=DEFAULT_FACES_DB)
 	parser.add_argument("-r", "--recursive", action="store_true")
+	parser.add_argument("--verbose", action="store_true")
 	args = parser.parse_args()
+
+	if args.verbose:
+		logging.basicConfig(level=logging.DEBUG)
+	else:
+		logging.basicConfig(level=logging.INFO)
 
 	if args.recursive:
 		it = Path(args.path).rglob("*.jpg")
