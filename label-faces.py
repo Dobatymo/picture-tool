@@ -1,13 +1,13 @@
+import logging
 from os import fspath
 from pathlib import Path
-import logging
-import os, threading
 
-import face_recognition
 import cv2
-from genutility.pickle import read_pickle, write_pickle
-from genutility.concurrency import parallel_map
 import dlib
+import face_recognition
+from genutility.concurrency import parallel_map
+from genutility.pickle import read_pickle, write_pickle
+
 
 class PictureWindow(object):
 
@@ -121,7 +121,7 @@ def get_faces(paths):
 		raise
 
 def label(paths, db, strict_bound, suggest_bound):
-	# type: (Iterable[DirEntry], FaceStorage) -> None
+	# type: (Iterable[DirEntry], FaceStorage, float, float) -> None
 
 	with PictureWindow() as win:
 
@@ -152,6 +152,7 @@ def label(paths, db, strict_bound, suggest_bound):
 if __name__ == "__main__":
 
 	from argparse import ArgumentParser
+
 	from genutility.args import is_dir
 
 	DEFAULT_STRICT_BOUND = 0.1
