@@ -165,7 +165,7 @@ def mod_image(inpath, outpath, args, quality=90, move=None):
 				raise RotateFailed()
 			except NoActionNeeded:
 				pass
-		
+
 		if not modified:
 			return False
 
@@ -188,20 +188,20 @@ def mod_image(inpath, outpath, args, quality=90, move=None):
 
 	return True
 
-
-if __name__ == "__main__":
+def main():
 	from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
 	from genutility.args import is_dir
+	from gooey import GooeyParser
 
-	SUBDIR = "pp-complete"
+	DEFAULT_QUALITY = 90
 
-	parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-	parser.add_argument("path", type=is_dir, help="Directory with .jpg files")
+	parser = GooeyParser(formatter_class=ArgumentDefaultsHelpFormatter)
+	parser.add_argument("path", type=is_dir, help="Directory with .jpg files", widget="DirChooser")
 
-	parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively")
-	parser.add_argument("-q", "--quality", type=int, default=90, help="JPEG quality level")
-	parser.add_argument("--move", type=str, help="Move original files to this subdirectory after processing.")
+	parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively.")
+	parser.add_argument("-q", "--quality", type=int, default=DEFAULT_QUALITY, help="JPEG quality level.")
+	parser.add_argument("--move", type=str, default=None, help="Move original files to this subdirectory after processing.")
 
 	# actions
 	parser.add_argument("--resize", action="store_true", help="Downsize image.")
@@ -219,7 +219,8 @@ if __name__ == "__main__":
 	parser.add_argument("--padding", type=float, default=PADDING_DEFAULT, help="Padding ratio relative to the image size")
 	parser.add_argument("--fill", default=FILL_DEFAULT, help="Font fill color")
 	parser.add_argument("--outline", default=OUTLINE_DEFAULT, help="Font outline color")
-	parser.add_argument("--maxsize", metavar=("W", "H"), nargs=2, type=int, help="Downsize so the images dimensions don't exceed W x H")
+	# parser.add_argument("--maxsize", metavar=("W", "H"), nargs=2, type=int, help="Downsize so the images dimensions don't exceed W x H")  # fails with Gooey
+	parser.add_argument("--maxsize", metavar="W H", nargs=2, type=int, help="Downsize so the images dimensions don't exceed W x H")
 	args = parser.parse_args()
 
 	if args.maxsize and not args.resize:
@@ -260,3 +261,6 @@ if __name__ == "__main__":
 				logger.warning("Could not auto-rotate %s", entry)
 			except Exception:
 				logger.exception("Processing %s failed", entry)
+
+if __name__ == "__main__":
+	main()
