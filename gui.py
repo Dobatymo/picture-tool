@@ -1,3 +1,5 @@
+from __future__ import generator_stop
+
 from gooey import Gooey
 
 from main import main

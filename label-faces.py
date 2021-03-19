@@ -1,8 +1,10 @@
+from __future__ import generator_stop
+
 import logging
 from collections import defaultdict
 from os import fspath
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 import cv2
 import dlib
@@ -14,12 +16,21 @@ if TYPE_CHECKING:
 	from os import DirEntry
 
 	import numpy as np
-	Encoding = np.ndarray
 
+	PathType = Union[Path, DirEntry]
+	RawImage = np.ndarray
+
+	Encoding = np.ndarray
+	Location = Tuple[int, int, int, int]
+
+	Encodings = List[Encoding]
+	Locations = List[Location]
 
 class PictureWindow(object):
 
 	def __init__(self, name="picture"):
+		# type: (str, ) -> None
+
 		self.name = name
 		cv2.startWindowThread()  # doesn't really do anything
 		cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -31,7 +42,7 @@ class PictureWindow(object):
 		cv2.destroyAllWindows()
 
 	def show(self, im, size=None, from_="rgb"):
-		# type: (np.ndarray, Optional[Tuple[int, int]], str) -> None
+		# type: (RawImage, Optional[Tuple[int, int]], str) -> None
 
 		if size:
 			im = cv2.resize(im, size)
@@ -49,13 +60,19 @@ class PictureWindow(object):
 		self.tick()
 
 	def tick(self):
+		# type: () -> None
+
 		cv2.waitKey(1)
 
 	def showfile(self, path):
+		# type: (str, ) -> None
+
 		im = cv2.imread(path)
 		self.show(im)
 
 def crop(img, loc, context=(0, 0, 0, 0)):
+	# (RawImage, Location, Tuple[int, int, int, int]) -> RawImage
+
 	top, right, bottom, left = loc  # face_recognition style
 	to, ri, bo, le = context
 
@@ -79,10 +96,10 @@ class FaceStorage(object):
 		self.strict_bound = strict_bound
 		self.suggest_bound = suggest_bound
 
-		self._encodings = []
-		self._unknown = []
-		self._skipped = []
-		self._names = []
+		self._encodings = []  # type: List[Encoding]
+		self._unknown = []  # type: List[Encoding]
+		self._skipped = []  # type: List[Encoding]
+		self._names = []  # type: List[str]
 
 		self._versions = self._get_versions()
 
@@ -109,13 +126,13 @@ class FaceStorage(object):
 
 		self._unknown.append(encoding)
 
-	def skipped(self, path, encoding):
+	def skipped(self, encoding):
 		# type: (Encoding, ) -> None
 
 		self._skipped.append(encoding)
 
 	def _closest(self, encodings, encoding):
-		# type: (List[Encoding], Encoding) -> Tuple[List[int], List[int]]
+		# type: (Encodings, Encoding) -> Tuple[List[int], List[int]]
 
 		dists = face_recognition.face_distance(encodings, encoding)
 
@@ -159,7 +176,7 @@ class FaceStorage(object):
 		self.__dict__.update(state)
 
 def get_features(entry):
-	# type: (DirEntry, ) -> Tuple[DirEntry, Location, Encoding]
+	# type: (PathType, ) -> Tuple[PathType, Locations, Encodings]
 
 	img = face_recognition.load_image_file(fspath(entry))
 
@@ -172,7 +189,7 @@ def get_features(entry):
 	return entry, locations, encodings
 
 def get_faces(paths):
-	# type: (Iterable[DirEntry]) -> Iterator[Tuple[DirEntry, Location, Encoding]]
+	# type: (Iterable[PathType], ) -> Iterator[Tuple[PathType, Location, Encoding]]
 
 	try:
 		for entry, locations, encodings in parallel_map(get_features, paths, bufsize=100):
@@ -185,7 +202,9 @@ def get_faces(paths):
 class VectorStorage(object):
 
 	def __init__(self):
-		self.d = defaultdict(dict)
+		# type: () -> None
+
+		self.d = defaultdict(dict)  # type: DefaultDict[str, Dict[Location, Encoding]]
 
 		self._versions = self._get_versions()
 
@@ -199,7 +218,7 @@ class VectorStorage(object):
 		}
 
 	def add(self, path, location, encoding):
-		# type: (str, Location, np.ndarray) -> None
+		# type: (str, Location, Encoding) -> None
 
 		if not isinstance(path, str):
 			raise TypeError("path must be str")
@@ -214,15 +233,17 @@ class VectorStorage(object):
 	def encodings(self, path):
 		# type: (str, ) -> Iterator[Tuple[Location, Encoding]]
 
-		for location, encoding in self.d[path]:
+		for location, encoding in self.d[path].items():
 			yield location, encoding
 
 	def __getstate__(self):
+		# type: () -> dict
 
 		state = self.__dict__.copy()
 		return state
 
 	def __setstate__(self, state):
+		# type: (dict, ) -> None
 
 		if state["_versions"] != self._get_versions():
 			logging.warning("dlib and face_recognition versions of pickled object and current environment don't match")
@@ -230,7 +251,7 @@ class VectorStorage(object):
 		self.__dict__.update(state)
 
 def label(paths, fdb, vdb):
-	# type: (Iterable[DirEntry], FaceStorage, VectorStorage) -> None
+	# type: (Iterable[PathType], FaceStorage, VectorStorage) -> None
 
 	with PictureWindow() as win:
 
@@ -264,8 +285,7 @@ def label(paths, fdb, vdb):
 				foundnames = set(fdb.get_names(suggest))
 
 			if foundnames:
-				foundnames = ", ".join(foundnames)
-				print(f"{entry.name} - Matches: {foundnames}")
+				print(f"{entry.name} - Matches: {', '.join(foundnames)}")
 
 			img = face_recognition.load_image_file(fspath(entry))
 			img = crop(img, loc, (20, 20, 20, 20))
@@ -290,13 +310,13 @@ if __name__ == "__main__":
 	DEFAULT_VECTOR_DB = "encodings.p"
 
 	parser = ArgumentParser()
-	parser.add_argument("path", type=is_dir)
+	parser.add_argument("path", type=is_dir, help="Input path to scan for JPEGs")
 	parser.add_argument("--strict", type=float, default=DEFAULT_STRICT_BOUND)
 	parser.add_argument("--suggest", type=float, default=DEFAULT_SUGGEST_BOUND)
 	parser.add_argument("--faces-db", type=Path, default=DEFAULT_FACES_DB)
 	parser.add_argument("--vector-db", type=Path, default=DEFAULT_VECTOR_DB)
 	parser.add_argument("-r", "--recursive", action="store_true")
-	parser.add_argument("--verbose", action="store_true")
+	parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
 	args = parser.parse_args()
 
 	if args.verbose:
