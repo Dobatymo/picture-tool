@@ -1,16 +1,17 @@
+from __future__ import generator_stop
+
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timezone
+from os import fspath
 from typing import TYPE_CHECKING
 
 import piexif
-from genutility.compat.os import fspath
 from genutility.pillow import NoActionNeeded, fix_orientation, write_text
 from PIL import Image
 
 if TYPE_CHECKING:
-	from typing import Any, Dict, Iterable, Tuple
-
-	from genutility.compat.pathlib import Path
+	from pathlib import Path
+	from typing import Any, Dict, Iterable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ def add_date(image, align="BR", fontsize=0.03, padding=0.01, fillcolor="white", 
 	try:
 		exif = piexif.load(image.info["exif"])
 	except KeyError as e:
-		raise NoDateFound()
+		raise NoDateFound(e)
 
 	dt = get_original_date(exif).date()
 
@@ -153,7 +154,7 @@ def mod_image(inpath, outpath, args, quality=90, move=None):
 			try:
 				exif = piexif.load(kwargs["exif"])
 			except KeyError as e:
-				raise RotateFailed()
+				raise RotateFailed(e)
 
 			try:
 				image = fix_orientation(image, exif)
@@ -189,7 +190,7 @@ def mod_image(inpath, outpath, args, quality=90, move=None):
 	return True
 
 def main():
-	from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+	from argparse import ArgumentDefaultsHelpFormatter
 
 	from genutility.args import is_dir
 	from gooey import GooeyParser
