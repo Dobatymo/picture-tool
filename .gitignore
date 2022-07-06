@@ -8,6 +8,7 @@ __pycache__/
 build/
 dist/
 .mypy_cache/
+poetry.toml
 
 # binaries
 dist-dlib/
