@@ -17,8 +17,8 @@ repos:
     hooks:
       - id: isort
         language_version: python3
-  - repo: https://gitlab.com/pycqa/flake8
-    rev: 3.9.1
+  - repo: https://github.com/pycqa/flake8
+    rev: 4.0.1
     hooks:
       - id: flake8
   - repo: https://github.com/pre-commit/mirrors-mypy
