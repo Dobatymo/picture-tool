@@ -6,56 +6,59 @@ from genutility.exceptions import ParseError
 
 logger = logging.getLogger()
 
+
 def scandir_error_log(entry, exception):
-	logger.error("%s in %s", exception.__class__.__qualname__, entry.path)
+    logger.error("%s in %s", exception.__class__.__qualname__, entry.path)
+
 
 if __name__ == "__main__":
-	from argparse import ArgumentParser
-	from collections import defaultdict
-	from os import fspath
+    from argparse import ArgumentParser
+    from collections import defaultdict
+    from os import fspath
 
-	#from pprint import pprint
-	from genutility.args import is_dir
-	from genutility.filesystem import fileextensions, scandir_ext
-	from genutility.iter import progress
-	parser = ArgumentParser()
-	parser.add_argument("path", nargs="+", type=is_dir)
-	parser.add_argument("-v", "--verbose", action="store_true")
-	args = parser.parse_args()
+    # from pprint import pprint
+    from genutility.args import is_dir
+    from genutility.filesystem import fileextensions, scandir_ext
+    from genutility.iter import progress
 
-	try:
-		import colorlog
-	except ImportError:
-		formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
-	else:
-		formatter = colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
+    parser = ArgumentParser()
+    parser.add_argument("path", nargs="+", type=is_dir)
+    parser.add_argument("-v", "--verbose", action="store_true")
+    args = parser.parse_args()
 
-	handler = logging.StreamHandler()
-	handler.setFormatter(formatter)
-	logger.addHandler(handler)
+    try:
+        import colorlog
+    except ImportError:
+        formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+    else:
+        formatter = colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
 
-	if args.verbose:
-		handler.setLevel(logging.DEBUG)
-		logger.setLevel(logging.DEBUG)
-	else:
-		handler.setLevel(logging.INFO)
-		logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
-	mif = MediaInfoFields()
+    if args.verbose:
+        handler.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
+    else:
+        handler.setLevel(logging.INFO)
+        logger.setLevel(logging.INFO)
 
-	extensions = set(["." + ext for ext in fileextensions.video + fileextensions.audio + fileextensions.images])
-	unhandled_keys = defaultdict(set)  # type: DefaultDict[str, Set[Tuple[str, str]]]
+    mif = MediaInfoFields()
 
-	for path in args.path:
-		for path in progress(scandir_ext(path, extensions, errorfunc=scandir_error_log)):
-			try:
-				values = dict(mif.mediainfo(fspath(path), unhandled_keys))
-			except ParseError as e:
-				logger.error("%s failed to parse: %s", path, e)
-				continue
+    extensions = {"." + ext for ext in fileextensions.video + fileextensions.audio + fileextensions.images}
+    unhandled_keys = defaultdict(set)  # type: DefaultDict[str, Set[Tuple[str, str]]]
 
-			#pprint(path)
-			#pprint(values)
-			#print("---")
+    for path in args.path:
+        for path in progress(scandir_ext(path, extensions, errorfunc=scandir_error_log)):
+            try:
+                values = dict(mif.mediainfo(fspath(path), unhandled_keys))
+            except ParseError as e:
+                logger.error("%s failed to parse: %s", path, e)
+                continue
 
-	mif.persist()
+            # pprint(path)
+            # pprint(values)
+            # print("---")
+
+    mif.persist()
