@@ -1,12 +1,15 @@
 import logging
-from os import PathLike, fspath
+from os import DirEntry, fspath
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Union
 
 import pandas as pd
 from filemeta.exif import InvalidImageDataError, exif_table
 from genutility.datetime import datetime_from_utc_timestamp_ns
 from genutility.pickle import cache
+from pandasql import sqldf
+
+EntryLike = Union[Path, DirEntry]
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +96,7 @@ ALL_COLUMNS = [
 ]
 
 
-def get_dataframe_by_iter(pathiter: Iterable[PathLike]) -> pd.DataFrame:
+def get_dataframe_by_iter(pathiter: Iterable[EntryLike]) -> pd.DataFrame:
 
     values = []
     for path in pathiter:
@@ -190,8 +193,6 @@ if __name__ == "__main__":
         result.dropna(axis="columns", how="all", inplace=True)
 
     elif args.sql:
-        from pandasql import sqldf
-
         result = sqldf(args.sql, locals())
 
     if args.out:

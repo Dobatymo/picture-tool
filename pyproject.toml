@@ -14,14 +14,15 @@ authors = ["Dobatymo <dobatymo@users.noreply.github.com>"]
 license = "ISC license"
 
 [tool.poetry.dependencies]
-python = "^3.7.1"
+python = "^3.8"
 face-recognition = "1.3.0"
-genutility = {version = "0.0.86", extras = ["pillow", "pickle"]}
+genutility = {version = "0.0.88", extras = ["pillow", "pickle"]}
 opencv-python = "4.4.0.44"
-pandas = "1.2.3"
+pandas = "1.4.3"
 pandasql = "0.7.3"
 piexif = "1.1.3"
-Pillow = "9.0.1"
+Pillow = "9.2.0"
+pyexiv2 = "2.7.1"
 filemeta = {git = "https://github.com/Dobatymo/filemeta.git"}
 
 [tool.poetry.dev-dependencies]
