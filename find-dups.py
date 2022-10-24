@@ -5,13 +5,16 @@ import os
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from collections import defaultdict
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from datetime import timedelta
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
-from typing import Callable, Container, DefaultDict, Iterable, Iterator, List, Set, Tuple
+from typing import Callable, Collection, Container, DefaultDict, Iterable, Iterator, List, Set, Tuple
 
+import humanize
 import imagehash
 import numpy as np
+from appdirs import user_data_dir
 from genutility.args import is_dir, suffix_lower
 from genutility.filesdb import FileDbSimple, NoResult
 from genutility.filesystem import entrysuffix, scandir_rec
@@ -19,7 +22,11 @@ from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
 from genutility.iter import progress
 from genutility.numpy import hamming_dist_packed
+from genutility.time import MeasureTime
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
+
+HEIF_EXTENSIONS = (".heic", ".heif")
+JPEG_EXTENSIONS = (".jpg", ".jpeg")
 
 
 class HashDB(FileDbSimple):
@@ -101,11 +108,21 @@ def scandir_error_log_warning(entry: os.DirEntry, exception) -> None:
     logging.warning("<%s> %s: %s", entry.path, type(exception).__name__, exception)
 
 
+def initializer_worker(extensions: Collection[str]) -> None:
+    if set(HEIF_EXTENSIONS) & set(extensions):
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+
+
 def main():
 
-    HEIF_EXTENSIONS = (".heic", ".heif")
-    DEFAULT_EXTENSIONS = (".jpg", ".jpeg") + HEIF_EXTENSIONS
-    DEFAULT_HASHDB = "hashes.sqlite"
+    APP_NAME = "picture-tool"
+    APP_AUTHOR = "Dobatymo"
+    DEFAULT_APPDATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR))
+
+    DEFAULT_EXTENSIONS = JPEG_EXTENSIONS + HEIF_EXTENSIONS + (".png",)
+    DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
     DEFAULT_NORMALIZATION_OPS = ("orientation", "resolution", "colors")
     DEFAULT_NORMALIZED_RESOLUTION = (256, 256)
     DEFAULT_PARALLEL_READ = multiprocessing.cpu_count()
@@ -130,7 +147,11 @@ def main():
         help="Hashing mode. `file-hash` simply hashes the whole file. `image-hash` hashes the uncompressed image data of the file and normalizes the rotation. `phash` calculates the perceptual hash of the image.",
     )
     parser.add_argument(
-        "--hashdb", metavar="PATH", default=DEFAULT_HASHDB, help="Path to sqlite database file to store hashes."
+        "--hashdb",
+        metavar="PATH",
+        type=Path,
+        default=DEFAULT_HASHDB,
+        help="Path to sqlite database file to store hashes.",
     )
     parser.add_argument(
         "--normalize",
@@ -159,11 +180,6 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO)
 
-    if set(HEIF_EXTENSIONS) & set(args.extensions):
-        from pillow_heif import register_heif_opener
-
-        register_heif_opener()
-
     def pathiter(directories: Iterable[Path], recursive: bool) -> Iterator[os.DirEntry]:
         for directory in directories:
             yield from scandir_rec(
@@ -171,6 +187,7 @@ def main():
             )
 
     if args.hashdb:
+        args.hashdb.parent.mkdir(parents=True, exist_ok=True)
         db = HashDB(args.hashdb)
         db.connection.execute("PRAGMA journal_mode=WAL;")
     else:
@@ -196,14 +213,16 @@ def main():
     else:
         hash_func = wrap_without_db(hash_func)
 
-    with ProcessPoolExecutor(args.parallel_read) as executor:
+    with ProcessPoolExecutor(
+        args.parallel_read, initializer=initializer_worker, initargs=(args.extensions,)
+    ) as executor, MeasureTime() as stopwatch:
         futures: List[Future] = []
         cached: bool
         path: Path
         img_hash: bytes
 
         for entry in progress(pathiter(args.directories, args.recursive)):
-            if entrysuffix(entry) not in args.extensions:
+            if entrysuffix(entry).lower() not in args.extensions:
                 continue
 
             futures.append(executor.submit(hash_func, Path(entry)))
@@ -241,11 +260,13 @@ def main():
             else:
                 num_fresh += 1
 
+        time_delta = humanize.naturaldelta(timedelta(seconds=stopwatch.get()))
         logging.info(
-            "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d",
+            "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d in %s",
             num_cached,
             num_fresh,
             num_error,
+            time_delta,
         )
 
     db.commit()
