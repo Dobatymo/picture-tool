@@ -16,12 +16,13 @@ import imagehash
 import numpy as np
 from appdirs import user_data_dir
 from genutility.args import is_dir, suffix_lower
+from genutility.file import StdoutFile
 from genutility.filesdb import FileDbSimple, NoResult
 from genutility.filesystem import entrysuffix, scandir_rec
 from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
 from genutility.iter import progress
-from genutility.numpy import hamming_dist_packed
+from genutility.numpy import get_num_chunks, hamming_dist_packed_chunked
 from genutility.time import MeasureTime
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 
@@ -173,6 +174,15 @@ def main():
         type=int,
         help="Default read concurrency",
     )
+    parser.add_argument(
+        "--chunksize",
+        type=int,
+        default=5000,
+        help="Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory.",
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None, help="Write results to file. Otherwise they are written to stdout."
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -274,20 +284,29 @@ def main():
     if metric == "equivalence":
         hashes = {digest: paths for digest, paths in hashes.items() if len(paths) > 1}
 
-        for i, (k, paths) in enumerate(hashes.items(), 1):
-            for path in paths:
-                print(f"{i:09} {path}")
+        with StdoutFile(args.out, "xt") as fw:
+            for i, (k, paths) in enumerate(hashes.items(), 1):
+                for path in paths:
+                    fw.write(f"{i:09} {path}\n")
     elif metric == "hamming":
         arr = np.frombuffer(b"".join(hashes), dtype=np.uint8).reshape(len(hashes), -1)
         hamming_threshold = 1
 
-        dists = hamming_dist_packed(arr[None, :], arr[:, None])
-        dups = np.argwhere(np.triu(dists <= hamming_threshold, 1))
+        hashes_shape = (arr.shape[0], arr.shape[0])
+        chunks_shape = (args.chunksize, args.chunksize)
 
-        for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0))):
-            print(f"{i:09} {paths[key]}")
-            for _, second in group:
-                print(f"{i:09} {paths[second]}")
+        total = get_num_chunks(np.array(hashes_shape), np.array(chunks_shape))
+
+        with StdoutFile(args.out, "xt") as fw:
+            for coords, dists in progress(
+                hamming_dist_packed_chunked(arr[None, :], arr[:, None], chunksize=chunks_shape), length=total
+            ):
+                dups = np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
+
+                for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0))):
+                    fw.write(f"{i:09} {paths[key]}\n")
+                    for _, second in group:
+                        fw.write(f"{i:09} {paths[second]}\n")
 
 
 if __name__ == "__main__":
