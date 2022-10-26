@@ -22,12 +22,16 @@ from genutility.filesystem import entrysuffix, scandir_rec
 from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
 from genutility.iter import progress
-from genutility.numpy import get_num_chunks, hamming_dist_packed_chunked
+from genutility.numpy import hamming_dist_packed
 from genutility.time import MeasureTime
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 
+from npmp import ChunkedParallel, SharedNdarray
+
 HEIF_EXTENSIONS = (".heic", ".heif")
 JPEG_EXTENSIONS = (".jpg", ".jpeg")
+
+Shape = Tuple[int, ...]
 
 
 class HashDB(FileDbSimple):
@@ -116,7 +120,34 @@ def initializer_worker(extensions: Collection[str]) -> None:
         register_heif_opener()
 
 
-def main():
+def hamming_duplicates_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, coords: Shape, axis: int, hamming_threshold: int
+) -> np.ndarray:
+    dists = hamming_dist_packed(a_arr, b_arr, axis)
+    return np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
+
+
+def hamming_duplicates(sharr: SharedNdarray, chunkshape: Shape, hamming_threshold: int) -> Collection[np.ndarray]:
+    if len(sharr.shape) != 2 or sharr.dtype != np.uint8:
+        raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
+
+    a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
+    b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
+
+    return ChunkedParallel(
+        hamming_duplicates_chunk, a_arr, b_arr, chunkshape, axis=-1, hamming_threshold=hamming_threshold
+    )
+
+
+def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
+    pos = 0
+    for buf in it:
+        size = len(buf)
+        buffer[pos : pos + size] = buf
+        pos += size
+
+
+def main() -> None:
 
     APP_NAME = "picture-tool"
     APP_AUTHOR = "Dobatymo"
@@ -177,7 +208,7 @@ def main():
     parser.add_argument(
         "--chunksize",
         type=int,
-        default=5000,
+        default=2000,
         help="Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory.",
     )
     parser.add_argument(
@@ -231,7 +262,9 @@ def main():
         path: Path
         img_hash: bytes
 
-        for entry in progress(pathiter(args.directories, args.recursive)):
+        for entry in progress(
+            pathiter(args.directories, args.recursive), extra_info_callback=lambda total, length: "Finding files"
+        ):
             if entrysuffix(entry).lower() not in args.extensions:
                 continue
 
@@ -242,7 +275,9 @@ def main():
         num_cached = 0
         num_fresh = 0
         num_error = 0
-        for future in progress(as_completed(futures), length=len(futures)):
+        for future in progress(
+            as_completed(futures), length=len(futures), extra_info_callback=lambda total, length: "Computing hashes"
+        ):
             try:
                 cached, path, img_hash = future.result()
             except (OSError, UnidentifiedImageError) as e:
@@ -279,34 +314,39 @@ def main():
             time_delta,
         )
 
-    db.commit()
+    if db:
+        db.commit()
 
     if metric == "equivalence":
         hashes = {digest: paths for digest, paths in hashes.items() if len(paths) > 1}
 
-        with StdoutFile(args.out, "xt") as fw:
+        with StdoutFile(args.out, "wt") as fw:
             for i, (k, paths) in enumerate(hashes.items(), 1):
                 for path in paths:
                     fw.write(f"{i:09} {path}\n")
     elif metric == "hamming":
-        arr = np.frombuffer(b"".join(hashes), dtype=np.uint8).reshape(len(hashes), -1)
         hamming_threshold = 1
 
-        hashes_shape = (arr.shape[0], arr.shape[0])
-        chunks_shape = (args.chunksize, args.chunksize)
+        sharr = SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
+        buffer_fill(hashes, sharr.getbuffer())
+        chunkshape = (args.chunksize, args.chunksize)
+        dups = np.concatenate(
+            list(
+                progress(
+                    hamming_duplicates(sharr, chunkshape, hamming_threshold),
+                    extra_info_callback=lambda total, length: "Matching hashes",
+                )
+            )
+        )
 
-        total = get_num_chunks(np.array(hashes_shape), np.array(chunks_shape))
+        idx = np.argsort(dups[:, 0])
+        dups = dups[idx]
 
-        with StdoutFile(args.out, "xt") as fw:
-            for coords, dists in progress(
-                hamming_dist_packed_chunked(arr[None, :], arr[:, None], chunksize=chunks_shape), length=total
-            ):
-                dups = np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
-
-                for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0))):
-                    fw.write(f"{i:09} {paths[key]}\n")
-                    for _, second in group:
-                        fw.write(f"{i:09} {paths[second]}\n")
+        with StdoutFile(args.out, "wt") as fw:
+            for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0))):
+                fw.write(f"{i:09} {paths[key]}\n")
+                for _, second in group:
+                    fw.write(f"{i:09} {paths[second]}\n")
 
 
 if __name__ == "__main__":
