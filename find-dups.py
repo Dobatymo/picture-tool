@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import logging
 import multiprocessing
@@ -9,13 +10,16 @@ from datetime import timedelta
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
-from typing import Callable, Collection, Container, DefaultDict, Iterable, Iterator, List, Set, Tuple
+from typing import Callable, Collection, Container, DefaultDict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 import humanize
 import imagehash
+import msgpack
 import numpy as np
+import piexif
 from appdirs import user_data_dir
 from genutility.args import is_dir, suffix_lower
+from genutility.datetime import datetime_from_utc_timestamp_ns
 from genutility.file import StdoutFile
 from genutility.filesdb import FileDbSimple, NoResult
 from genutility.filesystem import entrysuffix, scandir_rec
@@ -24,7 +28,9 @@ from genutility.image import normalize_image_rotation
 from genutility.iter import progress
 from genutility.numpy import hamming_dist_packed
 from genutility.time import MeasureTime
+from genutility.typing import CsvWriter
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
+from PIL.IptcImagePlugin import getiptcinfo
 
 from npmp import ChunkedParallel, SharedNdarray
 
@@ -41,6 +47,10 @@ class HashDB(FileDbSimple):
             ("file_sha256", "BLOB", "?"),
             ("image_sha256", "BLOB", "?"),
             ("phash", "BLOB", "?"),
+            ("exif", "BLOB", "?"),
+            ("icc_profile", "BLOB", "?"),
+            ("iptc", "BLOB", "?"),
+            ("photoshop", "BLOB", "?"),
         ]
 
     def __init__(self, path: str) -> None:
@@ -76,33 +86,83 @@ def hash_phash(path: str) -> bytes:
         return bytes.fromhex(str(imagehash.phash(img, hash_size=16)))  # 32bytes
 
 
-class wrap_with_db:
-    def __init__(self, func: Callable[[str], bytes], db: HashDB, colname: str) -> None:
+class ImageError(Exception):
+    pass
+
+
+class wrap:
+    def __init__(self, func: Callable[[str], bytes], colname: str) -> None:
         self.func = func
-        self.db = db
         self.colname = colname
 
-    def __call__(self, path: Path) -> Tuple[bool, Path, bytes]:
+    def get_cols(self) -> Tuple[str, ...]:
+        return (self.colname, "width", "height", "exif")
+
+    def _get_file_meta(self, path: Path) -> dict:
         try:
-            (img_hash,) = self.db.get(path, only={self.colname})
-            if img_hash is None:
+            img_hash = self.func(os.fspath(path))
+        except UnidentifiedImageError:
+            raise  # inherits from OSError, so must be re-raised explicitly
+        except OSError as e:
+            raise ImageError(path, e)
+
+        with Image.open(path) as img:
+            width, height = img.size
+            exif = img.info.get("exif", None)
+            icc_profile = img.info.get("icc_profile", None)
+            iptc = getiptcinfo(img)
+            photoshop = img.info.get("photoshop", None)
+
+        iptc_ = msgpack.packb(iptc, use_bin_type=True)
+        photoshop_ = msgpack.packb(photoshop, use_bin_type=True)
+
+        assert isinstance(img_hash, bytes)
+        assert isinstance(width, int)
+        assert isinstance(height, int)
+        assert isinstance(exif, (bytes, type(None)))
+        assert isinstance(icc_profile, (bytes, type(None)))
+        assert isinstance(iptc_, (bytes, type(None)))
+        assert isinstance(photoshop_, (bytes, type(None)))
+
+        return {
+            self.colname: img_hash,
+            "width": width,
+            "height": height,
+            "exif": exif,
+            "icc_profile": icc_profile,
+            "iptc": iptc_,
+            "photoshop": photoshop_,
+        }
+
+
+class wrap_without_db(wrap):
+    def __call__(self, path: Path) -> Tuple[bool, Path, dict]:
+        cached = False
+        meta = self._get_file_meta(path)
+        return cached, path, meta
+
+
+class wrap_with_db(wrap):
+    def __init__(self, func: Callable[[str], bytes], colname: str, db: HashDB, overwrite: bool = False) -> None:
+        wrap.__init__(self, func, colname)
+        self.only = self.get_cols()
+        self.db = db
+        self.overwrite = overwrite
+
+    def __call__(self, path: Path) -> Tuple[bool, Path, dict]:
+        try:
+            if self.overwrite:
+                raise NoResult
+            values = self.db.get(path, only=self.only)
+            meta = dict(zip(self.only, values))
+            if meta[self.colname] is None:
                 raise NoResult
             cached = True
         except NoResult:
-            img_hash = self.func(os.fspath(path))
+            meta = self._get_file_meta(path)
             cached = False
 
-        return cached, path, img_hash
-
-
-class wrap_without_db:
-    def __init__(self, func: Callable[[str], bytes]) -> None:
-        self.func = func
-
-    def __call__(self, path: Path) -> Tuple[bool, Path, bytes]:
-        cached = False
-        img_hash = self.func(os.fspath(path))
-        return cached, path, img_hash
+        return cached, path, meta
 
 
 hash_cols = {"file-hash": "file_sha256", "image-hash": "image_sha256", "phash": "phash"}
@@ -145,6 +205,13 @@ def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
         size = len(buf)
         buffer[pos : pos + size] = buf
         pos += size
+
+
+def maybe_decode(s: Optional[bytes], encoding: str = "ascii") -> Optional[str]:
+    if s is None:
+        return None
+    else:
+        return s.decode(encoding)
 
 
 def main() -> None:
@@ -214,6 +281,7 @@ def main() -> None:
     parser.add_argument(
         "--out", type=Path, default=None, help="Write results to file. Otherwise they are written to stdout."
     )
+    parser.add_argument("--overwrite-cache", action="store_true", help="Update cached values")
     args = parser.parse_args()
 
     if args.verbose:
@@ -249,10 +317,10 @@ def main() -> None:
 
     hash_func = hash_funcs[args.mode]
     colname = hash_cols[args.mode]
-    if db:
-        hash_func = wrap_with_db(hash_func, db, colname)
+    if db is not None:
+        hash_func = wrap_with_db(hash_func, colname, db, args.overwrite_cache)
     else:
-        hash_func = wrap_without_db(hash_func)
+        hash_func = wrap_without_db(hash_func, colname)
 
     with ProcessPoolExecutor(
         args.parallel_read, initializer=initializer_worker, initargs=(args.extensions,)
@@ -279,8 +347,14 @@ def main() -> None:
             as_completed(futures), length=len(futures), extra_info_callback=lambda total, length: "Computing hashes"
         ):
             try:
-                cached, path, img_hash = future.result()
-            except (OSError, UnidentifiedImageError) as e:
+                cached, path, meta = future.result()
+            except ImageError as e:
+                _path = e.args[0]
+                _e = e.args[1]
+                logging.warning("%s <%s>: %s", type(_e).__name__, _path, _e)
+                num_error += 1
+                continue
+            except UnidentifiedImageError as e:
                 logging.warning("%s: %s", type(e).__name__, e)
                 num_error += 1
                 continue
@@ -289,10 +363,11 @@ def main() -> None:
                 num_error += 1
                 continue
 
+            img_hash = meta[colname]
             rawpath = os.fspath(path)
 
-            if db and not cached:
-                db.add(path, derived={colname: img_hash}, commit=False)
+            if db is not None and not cached:
+                db.add(path, derived=meta, commit=False, replace=False)
 
             if metric == "equivalence":
                 hashes[img_hash].add(rawpath)
@@ -314,16 +389,45 @@ def main() -> None:
             time_delta,
         )
 
-    if db:
+    if db is not None:
         db.commit()
+
+    def write_dup(fw: CsvWriter, i: int, path: Union[str, Path]) -> None:
+        if db is not None:
+            if isinstance(path, Path):
+                _path = path
+            else:
+                _path = Path(path)
+
+            filesize, mod_date, exif = db.get(_path, only=("filesize", "mod_date", "exif"))
+            dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
+
+            if exif is None:
+                exif_date = None
+                exif_maker = None
+                exif_model = None
+            else:
+                d = piexif.load(exif)
+                exif_date = maybe_decode(d["Exif"].get(36867, None))
+                exif_maker = maybe_decode(d["0th"].get(271, None))
+                exif_model = maybe_decode(d["0th"].get(272, None))
+
+            fw.writerow([i, path, filesize, dt.isoformat(), exif_date, exif_maker, exif_model])
+        else:
+            fw.writerow([i, path])
+
+    if not hashes:
+        return
 
     if metric == "equivalence":
         hashes = {digest: paths for digest, paths in hashes.items() if len(paths) > 1}
 
-        with StdoutFile(args.out, "wt") as fw:
+        with StdoutFile(args.out, "wt", newline="") as fw:
+            writer = csv.writer(fw)
             for i, (k, paths) in enumerate(hashes.items(), 1):
                 for path in paths:
-                    fw.write(f"{i:09} {path}\n")
+                    write_dup(writer, i, path)
+
     elif metric == "hamming":
         hamming_threshold = 1
 
@@ -342,11 +446,12 @@ def main() -> None:
         idx = np.argsort(dups[:, 0])
         dups = dups[idx]
 
-        with StdoutFile(args.out, "wt") as fw:
-            for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0))):
-                fw.write(f"{i:09} {paths[key]}\n")
+        with StdoutFile(args.out, "wt", newline="") as fw:
+            writer = csv.writer(fw)
+            for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0)), 1):
+                write_dup(writer, i, paths[key])
                 for _, second in group:
-                    fw.write(f"{i:09} {paths[second]}\n")
+                    write_dup(writer, i, paths[second])
 
 
 if __name__ == "__main__":
