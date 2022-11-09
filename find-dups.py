@@ -10,7 +10,20 @@ from datetime import timedelta
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
-from typing import Callable, Collection, Container, DefaultDict, Iterable, Iterator, List, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Container,
+    DefaultDict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 import humanize
 import imagehash
@@ -26,6 +39,7 @@ from genutility.filesystem import entrysuffix, scandir_rec
 from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
 from genutility.iter import progress
+from genutility.json import read_json
 from genutility.numpy import hamming_dist_packed
 from genutility.time import MeasureTime
 from genutility.typing import CsvWriter
@@ -36,7 +50,9 @@ from npmp import ChunkedParallel, SharedNdarray
 
 HEIF_EXTENSIONS = (".heic", ".heif")
 JPEG_EXTENSIONS = (".jpg", ".jpeg")
-
+APP_NAME = "picture-tool"
+APP_AUTHOR = "Dobatymo"
+APP_VERSION = "0.1"
 Shape = Tuple[int, ...]
 
 
@@ -214,27 +230,49 @@ def maybe_decode(s: Optional[bytes], encoding: str = "ascii") -> Optional[str]:
         return s.decode(encoding)
 
 
+def notify(topic: str, message: str):
+    import requests
+
+    requests.post(
+        "https://ntfy.sh/",
+        json={
+            "topic": topic,
+            "message": message,
+            "title": APP_NAME,
+        },
+    )
+
+
+def group_sorted_pairs(pairs: Iterable[Tuple[Any, Any]]) -> List[List[Any]]:
+    return [[first] + [second for _, second in group] for first, group in groupby(pairs, key=itemgetter(0))]
+
+
 def main() -> None:
 
-    APP_NAME = "picture-tool"
-    APP_AUTHOR = "Dobatymo"
     DEFAULT_APPDATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR))
+
+    try:
+        config_path = DEFAULT_APPDATA_DIR / "config.json"
+        default_config = {k.replace("-", "_"): v for k, v in read_json(config_path).items()}
+        logging.debug("Loaded default arguments from %s", config_path)
+    except FileNotFoundError:
+        default_config = {}
 
     DEFAULT_EXTENSIONS = JPEG_EXTENSIONS + HEIF_EXTENSIONS + (".png",)
     DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
     DEFAULT_NORMALIZATION_OPS = ("orientation", "resolution", "colors")
     DEFAULT_NORMALIZED_RESOLUTION = (256, 256)
     DEFAULT_PARALLEL_READ = multiprocessing.cpu_count()
-    DESCRIPTION = "Find exact image duplicates"
+    DESCRIPTION = "Find picture duplicates"
 
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter, description=DESCRIPTION)
     parser.add_argument("directories", metavar="DIR", nargs="+", type=is_dir, help="Input directories")
     parser.add_argument(
         "--extensions",
         metavar=".EXT",
+        nargs="+",
         type=suffix_lower,
         default=DEFAULT_EXTENSIONS,
-        nargs="+",
         help="Image file extensions",
     )
     parser.add_argument("-r", "--recursive", action="store_true", help="Read directories recursively")
@@ -255,33 +293,48 @@ def main() -> None:
     parser.add_argument(
         "--normalize",
         metavar="OP",
-        default=DEFAULT_NORMALIZATION_OPS,
         nargs="+",
+        default=DEFAULT_NORMALIZATION_OPS,
         help="Normalization operations. Ie. when orientation is normalized, files with different orientations can be detected as duplicates",
     )
     parser.add_argument(
         "--resolution-normalized",
-        default=DEFAULT_NORMALIZED_RESOLUTION,
+        metavar="N",
         nargs=2,
         type=int,
+        default=DEFAULT_NORMALIZED_RESOLUTION,
         help="All pictures will be resized to this resolution prior to comparison. It should be smaller than the smallest picture in one duplicate group. If it's smaller, more differences in image details will be ignored.",
     )
     parser.add_argument(
         "--parallel-read",
-        default=DEFAULT_PARALLEL_READ,
+        metavar="N",
         type=int,
+        default=DEFAULT_PARALLEL_READ,
         help="Default read concurrency",
     )
     parser.add_argument(
         "--chunksize",
+        metavar="N",
         type=int,
         default=2000,
         help="Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory.",
     )
     parser.add_argument(
-        "--out", type=Path, default=None, help="Write results to file. Otherwise they are written to stdout."
+        "--out",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="Write results to file. Otherwise they are written to stdout.",
+    )
+    parser.add_argument(
+        "--ntfy-topic",
+        type=str,
+        default=None,
+        help="Get notifications using *ntfy* topics. Useful for long-running scans.",
     )
     parser.add_argument("--overwrite-cache", action="store_true", help="Update cached values")
+    parser.add_argument("--version", action="version", version=APP_VERSION)
+    parser.set_defaults(**default_config)
     args = parser.parse_args()
 
     if args.verbose:
@@ -419,39 +472,40 @@ def main() -> None:
     if not hashes:
         return
 
-    if metric == "equivalence":
-        hashes = {digest: paths for digest, paths in hashes.items() if len(paths) > 1}
+    dupgroups: List[List[str]]
 
-        with StdoutFile(args.out, "wt", newline="") as fw:
-            writer = csv.writer(fw)
-            for i, (k, paths) in enumerate(hashes.items(), 1):
-                for path in paths:
-                    write_dup(writer, i, path)
+    with MeasureTime() as stopwatch:
+        if metric == "equivalence":
+            dupgroups = [list(paths) for digest, paths in hashes.items() if len(paths) > 1]
 
-    elif metric == "hamming":
-        hamming_threshold = 1
+        elif metric == "hamming":
+            hamming_threshold = 1
 
-        sharr = SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
-        buffer_fill(hashes, sharr.getbuffer())
-        chunkshape = (args.chunksize, args.chunksize)
-        dups = np.concatenate(
-            list(
-                progress(
-                    hamming_duplicates(sharr, chunkshape, hamming_threshold),
-                    extra_info_callback=lambda total, length: "Matching hashes",
+            sharr = SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
+            buffer_fill(hashes, sharr.getbuffer())
+            chunkshape = (args.chunksize, args.chunksize)
+            dups = np.concatenate(
+                list(
+                    progress(
+                        hamming_duplicates(sharr, chunkshape, hamming_threshold),
+                        extra_info_callback=lambda total, length: "Matching hashes",
+                    )
                 )
             )
-        )
+            idx = np.argsort(dups[:, 0])
+            dupgroups = group_sorted_pairs(dups[idx])
+            dupgroups = [[paths[idx] for idx in indices] for indices in dupgroups]
 
-        idx = np.argsort(dups[:, 0])
-        dups = dups[idx]
+        time_delta = humanize.naturaldelta(timedelta(seconds=stopwatch.get()))
+        logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
+        if args.ntfy_topic:
+            notify(args.ntfy_topic, f"Found {len(dupgroups)} duplicate groups in {time_delta}")
 
-        with StdoutFile(args.out, "wt", newline="") as fw:
-            writer = csv.writer(fw)
-            for i, (key, group) in enumerate(groupby(dups, key=itemgetter(0)), 1):
-                write_dup(writer, i, paths[key])
-                for _, second in group:
-                    write_dup(writer, i, paths[second])
+    with StdoutFile(args.out, "wt", newline="") as fw:
+        writer = csv.writer(fw)
+        for i, paths in enumerate(dupgroups, 1):
+            for path in paths:
+                write_dup(writer, i, path)
 
 
 if __name__ == "__main__":
