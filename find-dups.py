@@ -16,6 +16,7 @@ from typing import (
     Collection,
     Container,
     DefaultDict,
+    Dict,
     Iterable,
     Iterator,
     List,
@@ -126,7 +127,11 @@ class wrap:
             width, height = img.size
             exif = img.info.get("exif", None)
             icc_profile = img.info.get("icc_profile", None)
-            iptc = getiptcinfo(img)
+            try:
+                iptc = getiptcinfo(img)
+            except SyntaxError as e:
+                logging.error("%s <%s>: %s", type(e).__name__, path, e)
+                iptc = None
             photoshop = img.info.get("photoshop", None)
 
         iptc_ = msgpack.packb(iptc, use_bin_type=True)
@@ -223,11 +228,18 @@ def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
         pos += size
 
 
-def maybe_decode(s: Optional[bytes], encoding: str = "ascii") -> Optional[str]:
+def maybe_decode(
+    s: Optional[bytes], encoding: str = "ascii", context: Optional[Dict[str, str]] = None
+) -> Optional[str]:
     if s is None:
         return None
     else:
-        return s.decode(encoding)
+        s = s.rstrip(b"\0")
+        try:
+            return s.decode(encoding)
+        except UnicodeDecodeError as e:
+            logging.warning("%s <%s>: %s", type(e).__name__, context, e)
+            return s.decode("latin1")  # should never fail
 
 
 def notify(topic: str, message: str):
@@ -461,9 +473,9 @@ def main() -> None:
                 exif_model = None
             else:
                 d = piexif.load(exif)
-                exif_date = maybe_decode(d["Exif"].get(36867, None))
-                exif_maker = maybe_decode(d["0th"].get(271, None))
-                exif_model = maybe_decode(d["0th"].get(272, None))
+                exif_date = maybe_decode(d["Exif"].get(36867, None), context={"path": path, "Exif": 36867})
+                exif_maker = maybe_decode(d["0th"].get(271, None), context={"path": path, "0th": 271})
+                exif_model = maybe_decode(d["0th"].get(272, None), context={"path": path, "0th": 272})
 
             fw.writerow([i, path, filesize, dt.isoformat(), exif_date, exif_maker, exif_model])
         else:
