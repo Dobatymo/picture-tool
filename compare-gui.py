@@ -1,6 +1,7 @@
 # pip install pandas pillow pillow-heif PySide2
 
 import logging
+import os
 import platform
 import subprocess
 import sys
@@ -31,52 +32,111 @@ def read_qt_pixmap(path: str) -> QtGui.QPixmap:
     """
 
     modemap = {
+        "L": QtGui.QImage.Format_Grayscale8,
         "RGB": QtGui.QImage.Format_RGB888,
         "RGBA": QtGui.QImage.Format_RGBA8888,
         "RGBX": QtGui.QImage.Format_RGBX8888,
+        "RGBa": QtGui.QImage.Format_RGBA8888_Premultiplied,
     }
 
     channelmap = {
+        "L": 1,
         "RGB": 3,
         "RGBA": 4,
         "RGBX": 4,
     }
 
     with Image.open(path) as img:
-        try:
-            format = modemap[img.mode]
-        except KeyError:
-            raise ValueError(f"Unsupported image mode: {img.mode}")
-
-        if (img.width * channelmap[img.mode]) % 4 != 0:
-            # Image scanlines not 32-bit aligned
+        if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
+            # Unsupported image mode or image scanlines not 32-bit aligned
             img = img.convert("RGBA")
-            format = modemap[img.mode]
 
+        # Are there any copies created below?
+        # Because the img buffer will be freed at the end of the block.
+        # Maybe Qt's `cleanupFunction` should be used instead of a context manager.
+
+        qimg_format = modemap[img.mode]
         b = QtCore.QByteArray(img.tobytes())
-        qimg = QtGui.QImage(b, img.size[0], img.size[1], format)
+        qimg = QtGui.QImage(b, img.size[0], img.size[1], qimg_format)
         return QtGui.QPixmap.fromImage(qimg)
 
 
+def show_in_file_manager(path: str) -> None:
+
+    if platform.system() == "Windows":
+        path = to_dos_path(path)
+        args = f'explorer /select,"{path}"'
+        subprocess.run(args)
+    else:
+        raise RuntimeError("Önly windows implemented")
+
+
+def open_using_default_app(path: str) -> None:
+
+    if platform.system() == "Windows":  # Windows
+        os.startfile(path)
+    elif platform.system() == "Darwin":  # macOS
+        subprocess.call(["open", path])
+    else:  # Linux variants
+        subprocess.call(["xdg-open", path])
+
+
 class AspectRatioPixmapLabel(QtWidgets.QLabel):
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, fit_to_widget: bool = True, parent: Optional[QtWidgets.QWidget] = None) -> None:
+
+        """If `fit_to_widget` is True, the label will be resized to match the parent widgets size.
+        If it's False, it will be resized to the images original size.
+        """
+
         super().__init__(parent)
         self.setMinimumSize(1, 1)
-        self.setScaledContents(False)
+        self.setScaledContents(False)  # we do the scaling ourselves
+        self.setAlignment(QtCore.Qt.AlignCenter)
         self.pm: Optional[QtGui.QPixmap] = None
+
+        # set properties
+        self.fit_to_widget = fit_to_widget
+
+    def clear(self) -> None:
+        super().clear()
+        self.pm = None
+
+    def scaledPixmap(self, size: QtCore.QSize) -> QtGui.QPixmap:
+        assert self.pm is not None
+        return self.pm.scaled(size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+
+    def scale(self):
+        assert self.pm is not None
+        if self.fit_to_widget:
+            super().setPixmap(self.scaledPixmap(self.size()))
+        else:
+            super().setPixmap(self.scaledPixmap(self.pm.size()))
+            self.adjustSize()
 
     def setPixmap(self, pm: QtGui.QPixmap) -> None:
         self.pm = pm
-        super().setPixmap(self.scaledPixmap())
+        self.scale()
 
-    def scaledPixmap(self) -> QtGui.QPixmap:
-        assert self.pm is not None
-        return self.pm.scaled(self.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
 
-    def resizeEvent(self, event) -> None:
-        if self.pm is not None:
-            super().setPixmap(self.scaledPixmap())
+        # The label doesn't get `resizeEvent`s when `QScrollArea.widgetResizable()` is False.
+        # `resizeEvent`s are however triggered by the labels `self.adjustSize()`,
+        # so when setting a new pixmap, a resize event could still be triggered
+        # even if `self.fit_to_widget` is False.
+
+        if self.pm is not None and self.fit_to_widget:
+            self.scale()
         super().resizeEvent(event)
+
+    @property
+    def fit_to_widget(self) -> bool:
+        return self._fit_to_widget
+
+    @fit_to_widget.setter
+    def fit_to_widget(self, value: bool) -> None:
+        self._fit_to_widget = value
+        if self.pm is not None:
+            self.scale()
 
 
 class GroupedPictureModel(QtCore.QAbstractTableModel):
@@ -142,58 +202,69 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         return None
 
 
-def show_in_file_manager(path: str) -> None:
-
-    if platform.system() == "Windows":
-        if path.startswith("\\\\?\\"):
-            path = path[4:]
-        args = f'explorer /select,"{path}"'
-        print(args)
-        subprocess.run(args)
-    else:
-        raise RuntimeError("Önly windows implemented")
-
-
 class GroupedPictureView(QtWidgets.QTableView):
     def __init__(self, wordwrap: bool = False, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.setSortingEnabled(True)
-
-    def setWordWrap(self, on: bool) -> None:
-        self.setWordWrap(on)
+        self.setWordWrap(True)
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
         index = self.indexAt(event.pos())
         if not index.isValid():
             return
 
-        open_directory_action = QtWidgets.QAction("Open file", self)
-        open_directory_action.triggered.connect(lambda event: self.open_file(event, index))
+        open_file_action = QtWidgets.QAction("Open file", self)
+        open_file_action.triggered.connect(lambda checked: self.open_file(index))
 
         open_directory_action = QtWidgets.QAction("Open directory", self)
-        open_directory_action.triggered.connect(lambda event: self.open_directory(event, index))
+        open_directory_action.triggered.connect(lambda checked: self.open_directory(index))
 
         contextMenu = QtWidgets.QMenu(self)
+        contextMenu.addAction(open_file_action)
         contextMenu.addAction(open_directory_action)
         contextMenu.exec_(event.globalPos())
 
-    def open_directory(self, event, index):
-        path = self.model().get(index.row())["path"]
+    def get_path_by_index(self, index: QtCore.QModelIndex) -> str:
+        return self.model().get(index.row())["path"]
+
+    def open_file(self, index: QtCore.QModelIndex) -> None:
+        path = self.get_path_by_index(index)
+        open_using_default_app(path)
+
+    def open_directory(self, index: QtCore.QModelIndex) -> None:
+        path = self.get_path_by_index(index)
         show_in_file_manager(path)
 
 
 class PictureWidget(QtWidgets.QWidget):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
 
         self.button = QtWidgets.QPushButton("Click me!")
         self.label = AspectRatioPixmapLabel()
 
+        self.scroll = QtWidgets.QScrollArea(self)
+        self.scroll.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
+        self.scroll.setWidget(self.label)
+
         self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.scroll)
         self.layout.addWidget(self.button)
+
+        # set properties
+        self.fit_to_window = True
+
+    @property
+    def fit_to_window(self):
+        return self._fit_to_window
+
+    @fit_to_window.setter
+    def fit_to_window(self, value: bool) -> None:
+        self._fit_to_window = value
+        self.scroll.setWidgetResizable(value)
+        self.label.fit_to_widget = value
 
     def load_picture(self, path: str) -> None:
         try:
@@ -209,6 +280,21 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         self.picture = PictureWidget()
         self.setCentralWidget(self.picture)
+        self.setStatusBar(QtWidgets.QStatusBar(self))
+
+        button_fit_to_window = QtWidgets.QAction("&Fit to window", self)
+        button_fit_to_window.setCheckable(True)
+        button_fit_to_window.setChecked(True)
+        button_fit_to_window.setStatusTip("Resize picture to fit to window")
+        button_fit_to_window.triggered[bool].connect(self.onFitToWindow)
+
+        menu = self.menuBar()
+
+        picture_menu = menu.addMenu("&Picture")
+        picture_menu.addAction(button_fit_to_window)
+
+    def onFitToWindow(self, checked: bool) -> None:
+        self.picture.fit_to_window = checked
 
     def closeEvent(self, event) -> None:
         self.hide()
@@ -287,8 +373,11 @@ class TableWindow(QtWidgets.QMainWindow):
 
         if dialog.exec_():
             path = dialog.selectedFiles()[0]
-            self.table.load_csv(path)
-            self.picture_window.show()
+            self.load_csv(path)
+
+    def load_csv(self, path: str):
+        self.table.load_csv(path)
+        self.picture_window.show()
 
     def onExit(self, event):
         self.close()
@@ -312,11 +401,22 @@ class TableWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
+
+    from argparse import ArgumentParser
+
+    from genutility.args import is_file
+
+    parser = ArgumentParser()
+    parser.add_argument("--csv-path", type=is_file)
+    args = parser.parse_args()
+
     app = QtWidgets.QApplication([])
 
     widget = TableWindow()
     widget.setWindowTitle(APP_NAME)
     widget.resize(800, 600)
+    if args.csv_path:
+        widget.load_csv(args.csv_path)
     widget.show()
 
     sys.exit(app.exec_())
