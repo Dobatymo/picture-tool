@@ -130,7 +130,7 @@ class wrap:
             try:
                 iptc = getiptcinfo(img)
             except SyntaxError as e:
-                logging.error("%s <%s>: %s", type(e).__name__, path, e)
+                logging.error("%s <%s>: %s", type(e).__name__, path, e)  # fixme: is this shown?
                 iptc = None
             photoshop = img.info.get("photoshop", None)
 
