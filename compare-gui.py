@@ -5,7 +5,8 @@ import os
 import platform
 import subprocess
 import sys
-from typing import Optional
+from itertools import chain
+from typing import Any, Optional
 
 import pandas as pd
 from genutility._files import to_dos_path
@@ -146,10 +147,18 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
     def __init__(self, parent: Optional[QtCore.QObject] = None):
         super().__init__(parent)
         self.df = pd.DataFrame({}, columns=self.columns).set_index("group")
+        self.checked = pd.Series(False, index=self.df.index, name="checked", dtype="boolean")
 
     def load_df(self, df: pd.DataFrame) -> None:
         self.beginResetModel()
         self.df = df
+        self.checked = pd.Series(False, index=self.df.index, name="checked", dtype="boolean")
+        self.priority = pd.Series(
+            list(chain.from_iterable(range(i) for i in df.groupby("group").count()["path"])),
+            index=self.df.index,
+            name="reference",
+            dtype="int32",
+        )
         self.endResetModel()
 
     # required by Qt
@@ -182,13 +191,24 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
     def get(self, row: int) -> pd.Series:
         return self.df.iloc[row]
 
+    def flags(self, index: QtCore.QModelIndex):
+        if not index.isValid():
+            return None
+
+        row, col = index.row(), index.column()
+
+        if col == 0 and self.priority.iloc[row] > 0:
+            return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsUserCheckable
+
+        return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+
     def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.DisplayRole) -> Optional[str]:
         if not index.isValid():
             return None
 
-        if role == QtCore.Qt.DisplayRole:
-            row, col = index.row(), index.column()
+        row, col = index.row(), index.column()
 
+        if role == QtCore.Qt.DisplayRole:
             try:
                 if col == 0:
                     return str(self.df.index[row])
@@ -199,6 +219,28 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
             except KeyError:
                 logging.warning("Invalid table access at %d, %d", row, col)
 
+        elif role == QtCore.Qt.CheckStateRole:
+            if col == 0 and self.priority.iloc[row] > 0:
+                if self.checked.iloc[row]:
+                    return QtCore.Qt.Checked
+                else:
+                    return QtCore.Qt.Unchecked
+        elif role == QtCore.Qt.TextAlignmentRole:
+            if col == 0:
+                return int(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)  # bug
+
+        return None
+
+    def setData(self, index: QtCore.QModelIndex, value: Any, role: int = QtCore.Qt.DisplayRole) -> Optional[bool]:
+        if not index.isValid():
+            return None
+
+        row = index.row()
+
+        if role == QtCore.Qt.CheckStateRole:
+            self.checked.iloc[row] = value == QtCore.Qt.Checked
+            return True
+
         return None
 
 
@@ -208,7 +250,7 @@ class GroupedPictureView(QtWidgets.QTableView):
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.setSortingEnabled(True)
-        self.setWordWrap(True)
+        self.setWordWrap(wordwrap)
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
         index = self.indexAt(event.pos())
