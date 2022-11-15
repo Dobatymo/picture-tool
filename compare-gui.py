@@ -141,25 +141,33 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
 
 
 class GroupedPictureModel(QtCore.QAbstractTableModel):
-
-    columns = ["group", "path", "filesize"]
-
     def __init__(self, parent: Optional[QtCore.QObject] = None):
         super().__init__(parent)
-        self.df = pd.DataFrame({}, columns=self.columns).set_index("group")
-        self.checked = pd.Series(False, index=self.df.index, name="checked", dtype="boolean")
+        df = pd.DataFrame({}, columns=["group", "path"])
+        self.load_df(df)
 
     def load_df(self, df: pd.DataFrame) -> None:
+        assert "checked" not in df
+        assert "priority" not in df
+
         self.beginResetModel()
-        self.df = df
-        self.checked = pd.Series(False, index=self.df.index, name="checked", dtype="boolean")
-        self.priority = pd.Series(
-            list(chain.from_iterable(range(i) for i in df.groupby("group").count()["path"])),
-            index=self.df.index,
-            name="reference",
+        self.df = df.set_index("group")
+        priority = pd.Series(
+            list(chain.from_iterable(range(i) for i in self.df.groupby("group").count()["path"])),
             dtype="int32",
-        )
+        ).values
+        assert not isinstance(priority, pd.Series), "Cannot assign series because of wrong index"
+        self.df["priority"] = priority
+        self.df["checked"] = False
+        self.cols = {name: self.df.columns.get_loc(name) for name in ("checked", "priority")}
+
         self.endResetModel()
+
+    def get(self, row: int) -> pd.Series:
+        return self.df.iloc[row]
+
+    def set_checked(self, row: int, checked: bool) -> None:
+        self.df.iloc[row, self.cols["checked"]] = checked
 
     # required by Qt
 
@@ -167,9 +175,10 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         return self.df.shape[0]
 
     def columnCount(self, index: QtCore.QModelIndex) -> int:
-        return self.df.shape[1] + 1
+        return self.df.shape[1]  # plus index, minus priority and checked
 
     def headerData(self, section: int, orientation: QtCore.Qt.Orientation, role: int) -> Optional[str]:
+        # self.headerDataChanged.emit() ?
         if orientation == QtCore.Qt.Orientation.Horizontal:
             if section == 0:
                 if role == QtCore.Qt.DisplayRole:
@@ -182,14 +191,11 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
                 if role == QtCore.Qt.DisplayRole:
                     return self.df.columns[section - 1]
                 elif role == QtCore.Qt.ToolTipRole:
-                    return f"Sort by {self.df.columns[section-1]}"
+                    return f"Sort {self.df.index.name} by {self.df.columns[section-1]} of reference file"
                 elif role == QtCore.Qt.StatusTipRole:
-                    return f"Sort by {self.df.columns[section-1]}"
+                    return f"Sort {self.df.index.name} by {self.df.columns[section-1]} of reference file"
 
         return None
-
-    def get(self, row: int) -> pd.Series:
-        return self.df.iloc[row]
 
     def flags(self, index: QtCore.QModelIndex):
         if not index.isValid():
@@ -197,12 +203,12 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
 
         row, col = index.row(), index.column()
 
-        if col == 0 and self.priority.iloc[row] > 0:
+        if col == 0 and self.df.iloc[row, self.cols["priority"]] > 0:
             return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsUserCheckable
 
         return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
 
-    def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.DisplayRole) -> Optional[str]:
+    def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.DisplayRole) -> Any:
         if not index.isValid():
             return None
 
@@ -220,11 +226,12 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
                 logging.warning("Invalid table access at %d, %d", row, col)
 
         elif role == QtCore.Qt.CheckStateRole:
-            if col == 0 and self.priority.iloc[row] > 0:
-                if self.checked.iloc[row]:
+            if col == 0 and self.df.iloc[row, self.cols["priority"]] > 0:
+                if self.df.iloc[row, self.cols["checked"]]:
                     return QtCore.Qt.Checked
                 else:
                     return QtCore.Qt.Unchecked
+
         elif role == QtCore.Qt.TextAlignmentRole:
             if col == 0:
                 return int(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)  # bug
@@ -238,10 +245,24 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         row = index.row()
 
         if role == QtCore.Qt.CheckStateRole:
-            self.checked.iloc[row] = value == QtCore.Qt.Checked
+            self.set_checked(row, value == QtCore.Qt.Checked)
+            # self.dataChanged.emit() ?
             return True
 
         return None
+
+    def sort(self, column: int, order: QtCore.Qt.SortOrder = QtCore.Qt.AscendingOrder) -> None:
+        ascending = order == QtCore.Qt.AscendingOrder
+        if column == 0:
+            self.beginResetModel()
+            self.df.sort_index(ascending=ascending, inplace=True, kind="stable")
+            self.endResetModel()
+        elif column > 0:
+            column = self.df.columns[column - 1]
+            idx = self.df.groupby("group").nth(0).sort_values(column, ascending=ascending, kind="stable").index
+            self.beginResetModel()
+            self.df = self.df.loc[idx]
+            self.endResetModel()
 
 
 class GroupedPictureView(QtWidgets.QTableView):
@@ -348,7 +369,7 @@ class TableWidget(QtWidgets.QWidget):
         super().__init__()
 
         self.picture_window = picture_window
-        self.view = GroupedPictureView(self)
+        self.view = GroupedPictureView(parent=self)
         self.model = GroupedPictureModel()
         self.view.setModel(self.model)
 
@@ -361,8 +382,8 @@ class TableWidget(QtWidgets.QWidget):
         df = pd.read_csv(
             path,
             names=["group", "path", "filesize", "mod_date", "date_taken", "maker", "model"],
-            index_col="group",
             keep_default_na=False,
+            parse_dates=["mod_date"],
         )
 
         self.model.load_df(df)

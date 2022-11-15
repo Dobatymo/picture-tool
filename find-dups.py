@@ -270,7 +270,7 @@ def main() -> None:
     except FileNotFoundError:
         default_config = {}
 
-    DEFAULT_EXTENSIONS = JPEG_EXTENSIONS + HEIF_EXTENSIONS + (".png",)
+    DEFAULT_EXTENSIONS = JPEG_EXTENSIONS + HEIF_EXTENSIONS + (".png", ".webp")
     DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
     DEFAULT_NORMALIZATION_OPS = ("orientation", "resolution", "colors")
     DEFAULT_NORMALIZED_RESOLUTION = (256, 256)
@@ -508,7 +508,7 @@ def main() -> None:
             dupgroups = group_sorted_pairs(dups[idx])
             dupgroups = [[paths[idx] for idx in indices] for indices in dupgroups]
 
-        time_delta = humanize.naturaldelta(timedelta(seconds=stopwatch.get()))
+        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
         logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
         if args.ntfy_topic:
             notify(args.ntfy_topic, f"Found {len(dupgroups)} duplicate groups in {time_delta}")
