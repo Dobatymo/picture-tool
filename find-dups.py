@@ -445,7 +445,7 @@ def main() -> None:
             else:
                 num_fresh += 1
 
-        time_delta = humanize.naturaldelta(timedelta(seconds=stopwatch.get()))
+        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
         logging.info(
             "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d in %s",
             num_cached,
@@ -515,6 +515,7 @@ def main() -> None:
 
     with StdoutFile(args.out, "wt", newline="") as fw:
         writer = csv.writer(fw)
+        writer.writerow(["group", "path", "filesize", "mod_date", "date_taken", "maker", "model"])
         for i, paths in enumerate(dupgroups, 1):
             for path in paths:
                 write_dup(writer, i, path)

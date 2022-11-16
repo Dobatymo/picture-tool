@@ -161,20 +161,21 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         self.load_df(df)
 
     def load_df(self, df: pd.DataFrame) -> None:
-        assert "checked" not in df
-        assert "priority" not in df
-
         self.beginResetModel()
         self.df = df.set_index("group")
-        priority = pd.Series(
-            list(chain.from_iterable(range(i) for i in self.df.groupby("group").count()["path"])),
-            dtype="int32",
-        ).values
-        assert not isinstance(priority, pd.Series), "Cannot assign series because of wrong index"
-        self.df["priority"] = priority
-        self.df["checked"] = False
-        self.cols = {name: self.df.columns.get_loc(name) for name in ("priority", "checked")}
 
+        if "priority" not in df:
+            priority = pd.Series(
+                list(chain.from_iterable(range(i) for i in self.df.groupby("group").count()["path"])),
+                dtype="int32",
+            ).values
+            assert not isinstance(priority, pd.Series), "Cannot assign series because of wrong index"
+            self.df["priority"] = priority
+
+        if "checked" not in df:
+            self.df["checked"] = False
+
+        self.cols = {name: self.df.columns.get_loc(name) for name in ("priority", "checked")}
         self.endResetModel()
 
     def get(self, row_idx: int) -> pd.Series:
@@ -236,7 +237,6 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         return self.df.shape[1]  # plus index, minus priority and checked
 
     def headerData(self, section: int, orientation: QtCore.Qt.Orientation, role: int) -> Optional[str]:
-        # self.headerDataChanged.emit() ?
         if orientation == QtCore.Qt.Orientation.Horizontal:
             if section == 0:
                 if role == QtCore.Qt.DisplayRole:
@@ -255,7 +255,7 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
 
         return None
 
-    def flags(self, index: QtCore.QModelIndex):
+    def flags(self, index: QtCore.QModelIndex) -> QtCore.Qt.ItemFlags:
         if not index.isValid():
             return None
 
@@ -479,7 +479,7 @@ class PictureWindow(QtWidgets.QMainWindow):
 
     def __init__(
         self, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags()
-    ):
+    ) -> None:
         super().__init__(parent, flags)
 
         self.picture = PictureWidget()
@@ -522,7 +522,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     def onNormalizeScale(self, checked: bool) -> None:
         print("not implemented yet", checked)
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.hide()
         event.accept()
 
@@ -560,15 +560,18 @@ class TableWidget(QtWidgets.QWidget):
     def onRowReference(self, group: int, path: str) -> None:
         self.picture_window.picture.reference_picture(group, path)
 
-    def load_csv(self, path: str):
+    def load_csv(self, path: str) -> None:
         df = pd.read_csv(
             path,
-            names=["group", "path", "filesize", "mod_date", "date_taken", "maker", "model"],
+            header=0,
             keep_default_na=False,
             parse_dates=["mod_date"],
+            dtype={"priority": "int32", "checked": "bool"},
         )
-
         self.model.load_df(df)
+
+    def to_csv(self, path: str) -> None:
+        self.model.df.to_csv(path)
 
     def has_data(self) -> bool:
         return len(self.model.df) > 0
@@ -591,6 +594,7 @@ class TableWindow(QtWidgets.QMainWindow):
         self, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags()
     ):
         super().__init__(parent, flags)
+        self.filename: Optional[str] = None
 
         self.picture_window = PictureWindow()
         self.picture_window.resize(800, 600)
@@ -600,6 +604,10 @@ class TableWindow(QtWidgets.QMainWindow):
         button_open = QtWidgets.QAction("&Open", self)
         button_open.setStatusTip("Open list of image groups")
         button_open.triggered.connect(self.onOpen)
+
+        button_save = QtWidgets.QAction("&Save", self)
+        button_save.setStatusTip("Save list of image groups with selection")
+        button_save.triggered.connect(self.onSave)
 
         button_exit = QtWidgets.QAction("E&xit", self)
         button_exit.setStatusTip("Close the application")
@@ -617,6 +625,7 @@ class TableWindow(QtWidgets.QMainWindow):
 
         file_menu = menu.addMenu("&File")
         file_menu.addAction(button_open)
+        file_menu.addAction(button_save)
         file_menu.addAction(button_exit)
 
         view_menu = menu.addMenu("&View")
@@ -638,22 +647,37 @@ class TableWindow(QtWidgets.QMainWindow):
         self.picture_window.move(pos)
         self.picture_window.show()
 
-    def onOpen(self, event):
+    def onOpen(self, checked: bool) -> None:
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.ExistingFile)
         dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptOpen)
-        dialog.setNameFilter("CSV files (*.csv)")
+        dialog.setMimeTypeFilters(["text/csv"])
         dialog.setViewMode(QtWidgets.QFileDialog.Detail)
 
         if dialog.exec_():
             path = dialog.selectedFiles()[0]
             self.load_csv(path)
 
-    def load_csv(self, path: str):
-        self.table.load_csv(path)
-        self.picture_window.show()
+    def onSave(self, checked: bool) -> None:
 
-    def onExit(self, event):
+        dialog = QtWidgets.QFileDialog(self)
+        dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
+        dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptSave)
+        dialog.setMimeTypeFilters(["text/csv"])
+        dialog.setDefaultSuffix("csv")
+        dialog.setViewMode(QtWidgets.QFileDialog.Detail)
+        if self.filename:
+            dialog.selectFile(self.filename)
+
+        if dialog.exec_():
+            self.filename = dialog.selectedFiles()[0]
+            assert self.filename  # for mypy
+            self.table.to_csv(self.filename)
+
+    def load_csv(self, path: str) -> None:
+        self.table.load_csv(path)
+
+    def onExit(self, checked: bool) -> None:
         self.close()
 
     def onFullscreen(self, checked: bool) -> None:
