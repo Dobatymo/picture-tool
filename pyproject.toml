@@ -16,13 +16,13 @@ license = "ISC license"
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
 face-recognition = "1.3.0"
-genutility = {version = "0.0.94", extras = ["filesdb", "numpy", "pickle", "pillow"]}
-opencv-python = "4.4.0.44"
-pandas = "1.4.3"
-pandasql = "0.7.3"
-piexif = "1.1.3"
-Pillow = "9.2.0"
-pyexiv2 = "2.7.1"
+genutility = {version = "^0.0.94", extras = ["filesdb", "numpy", "pickle", "pillow"]}
+opencv-python = "4.5.4.60"
+pandas = "^1.4.3"
+pandasql = "^0.7.3"
+piexif = "^1.1.3"
+Pillow = "^9.2.0"
+pyexiv2 = "^2.7.1"
 filemeta = {git = "https://github.com/Dobatymo/filemeta.git"}
 imagehash = "^4.3.1"
 appdirs = "^1.4.4"
