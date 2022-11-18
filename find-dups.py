@@ -48,6 +48,7 @@ from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from PIL.IptcImagePlugin import getiptcinfo
 
 from npmp import ChunkedParallel, SharedNdarray
+from utils import get_exif_dates
 
 HEIF_EXTENSIONS = (".heic", ".heif")
 JPEG_EXTENSIONS = (".jpg", ".jpeg")
@@ -64,6 +65,8 @@ class HashDB(FileDbSimple):
             ("file_sha256", "BLOB", "?"),
             ("image_sha256", "BLOB", "?"),
             ("phash", "BLOB", "?"),
+            ("width", "INTEGER", "?"),
+            ("height", "INTEGER", "?"),
             ("exif", "BLOB", "?"),
             ("icc_profile", "BLOB", "?"),
             ("iptc", "BLOB", "?"),
@@ -464,20 +467,46 @@ def main() -> None:
             else:
                 _path = Path(path)
 
-            filesize, mod_date, exif = db.get(_path, only=("filesize", "mod_date", "exif"))
+            filesize, mod_date, width, height, exif = db.get(
+                _path, only=("filesize", "mod_date", "width", "height", "exif")
+            )
             dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
 
             if exif is None:
-                exif_date = None
+                exif_date_modified = None
+                exif_date_taken = None
+                exif_date_created = None
                 exif_maker = None
                 exif_model = None
             else:
                 d = piexif.load(exif)
-                exif_date = maybe_decode(d["Exif"].get(36867, None), context={"path": path, "Exif": 36867})
+                try:
+                    dates = get_exif_dates(d)
+                except ValueError as e:
+                    logging.warning("Invalid date format <%s>: %s", path, e)
+                    dates = {}
+                exif_date_modified = dates.get("modified")
+                exif_date_taken = dates.get("original")
+                exif_date_created = dates.get("digitized")
+
                 exif_maker = maybe_decode(d["0th"].get(271, None), context={"path": path, "0th": 271})
                 exif_model = maybe_decode(d["0th"].get(272, None), context={"path": path, "0th": 272})
 
-            fw.writerow([i, path, filesize, dt.isoformat(), exif_date, exif_maker, exif_model])
+            fw.writerow(
+                [
+                    i,
+                    path,
+                    filesize,
+                    dt.isoformat(),
+                    width,
+                    height,
+                    exif_date_modified.isoformat() if exif_date_modified else None,
+                    exif_date_taken.isoformat() if exif_date_taken else None,
+                    exif_date_created.isoformat() if exif_date_created else None,
+                    exif_maker,
+                    exif_model,
+                ]
+            )
         else:
             fw.writerow([i, path])
 
@@ -515,10 +544,27 @@ def main() -> None:
 
     with StdoutFile(args.out, "wt", newline="") as fw:
         writer = csv.writer(fw)
-        writer.writerow(["group", "path", "filesize", "mod_date", "date_taken", "maker", "model"])
+        writer.writerow(
+            [
+                "group",
+                "path",
+                "filesize",
+                "mod_date",
+                "width",
+                "height",
+                "exif_date_modified",
+                "exif_date_taken",
+                "exif_date_created",
+                "maker",
+                "model",
+            ]
+        )
         for i, paths in enumerate(dupgroups, 1):
             for path in paths:
-                write_dup(writer, i, path)
+                try:
+                    write_dup(writer, i, path)
+                except Exception:
+                    logging.exception("Failed to obtain meta info for <%s>")
 
 
 if __name__ == "__main__":
