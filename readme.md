@@ -3,7 +3,7 @@
 - Add date stamps to pictures. The date/time is read from the EXIF information.
 - Resize and rotate
 
-## Help
+## Statistics
 
 - `py statistics.py --help`
 ```
@@ -43,7 +43,7 @@ optional arguments:
   --sql QUERY           Query by SQL. Use table `df`.
 ```
 
-## Examples
+### Examples
 
 - `py statistics.py "C:\Users\Public\Pictures" --groupby "0th Model"`
 
@@ -75,6 +75,59 @@ Find all pictures taken by a Canon EOS camera using SQL query.
 	- standard prune operation: delete to bin, delete, move to dir, copy to dir, replace with (sym/hard-link)
 	- remember pruned files and optionally auto-prune new previously pruned files
 - GUI: browse image using map based on GPS or other meta data
+
+## find-dups
+
+```
+usage: find-dups.py [-h] [--extensions .EXT [.EXT ...]] [-r] [-v] [--mode {file-hash,image-hash,phash}] [--hashdb PATH] [--normalize OP [OP ...]]
+                    [--resolution-normalized N N] [--parallel-read N] [--chunksize N] [--out PATH] [--ntfy-topic NTFY_TOPIC] [--overwrite-cache] [--version]
+                    DIR [DIR ...]
+
+Find picture duplicates
+
+positional arguments:
+  DIR                   Input directories
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --extensions .EXT [.EXT ...]
+                        Image file extensions (default: ('.jpg', '.jpeg', '.heic', '.heif', '.png', '.webp'))
+  -r, --recursive       Read directories recursively (default: False)
+  -v, --verbose         Verbose output (default: False)
+  --mode {file-hash,image-hash,phash}
+                        Hashing mode. `file-hash` simply hashes the whole file. `image-hash` hashes the uncompressed image data of the file and normalizes the
+                        rotation. `phash` calculates the perceptual hash of the image. (default: image-hash)
+  --hashdb PATH         Path to sqlite database file to store hashes. (default: C:\Users\<username>\AppData\Local\Dobatymo\picture-tool\hashes.sqlite)
+  --normalize OP [OP ...]
+                        Normalization operations. Ie. when orientation is normalized, files with different orientations can be detected as duplicates
+                        (default: ('orientation', 'resolution', 'colors'))
+  --resolution-normalized N N
+                        All pictures will be resized to this resolution prior to comparison. It should be smaller than the smallest picture in one duplicate
+                        group. If it's smaller, more differences in image details will be ignored. (default: (256, 256))
+  --parallel-read N     Default read concurrency (default: 4)
+  --chunksize N         Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory. (default: 2000)
+  --out PATH            Write results to file. Otherwise they are written to stdout. (default: None)
+  --ntfy-topic NTFY_TOPIC
+                        Get notifications using *ntfy* topics. Useful for long-running scans. (default: dobatymo-xjMiBan0A)
+  --overwrite-cache     Update cached values (default: False)
+  --version             show program's version number and exit
+```
+
+### Alternatives
+- idealo/imagededup. pros: CNN, cons: memory issues with CNN...
+- elisemercury/Duplicate-Image-Finder. cons: no multiprocessing
+- InexplicableMagic/photodedupe. Rust.
+- jesjimher/imgdupes
+- rif/imgdup2go
+- markusressel/py-image-dedup
+- opennota/findimagedupes
+- magamig/duplicate-images-finder
+- DragonOfMath/dupe-images. node.js.
+- knjcode/imgdupes
+
+### Todo
+- folder modes: multiple folder inputs, combine them  or treat all of them separately. two folder mode: find dups from first folder in second, but not within the same folder
+- ignore files based on meta data, ie. filesize, resolution, ...
 
 ## Alternatives
 - ACDSee Photo Studio (Windows 7+)

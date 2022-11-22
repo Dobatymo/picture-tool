@@ -15,6 +15,8 @@ from PIL import Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 
+from utils import pd_sort_groups_by_first_row
+
 register_heif_opener()
 
 APP_NAME = "compare-gui"
@@ -315,10 +317,8 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
             self.df.sort_index(ascending=ascending, inplace=True, kind="stable")
             self.endResetModel()
         elif column > 0:
-            column = self.df.columns[column - 1]
-            idx = self.df.groupby("group").nth(0).sort_values(column, ascending=ascending, kind="stable").index
             self.beginResetModel()
-            self.df = self.df.loc[idx]
+            self.df = pd_sort_groups_by_first_row(self.df, "group", self.df.columns[column - 1], ascending)
             self.endResetModel()
 
 

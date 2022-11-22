@@ -16,7 +16,7 @@ license = "ISC license"
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
 face-recognition = "1.3.0"
-genutility = {version = "^0.0.94", extras = ["filesdb", "numpy", "pickle", "pillow"]}
+genutility = {version = "^0.0.95", extras = ["filesdb", "numpy", "pickle", "pillow"]}
 opencv-python = "4.5.4.60"
 pandas = "^1.4.3"
 pandasql = "^0.7.3"

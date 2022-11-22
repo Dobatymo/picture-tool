@@ -1,7 +1,48 @@
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from functools import total_ordering
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 
+import numpy as np
+import pandas as pd
 import piexif
+from genutility.numpy import hamming_dist_packed
+
+
+def with_stem(path: Path, stem: str) -> Path:
+    return path.with_name(stem + path.suffix)
+
+
+def hamming_duplicates_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, coords: Tuple[int, ...], axis: int, hamming_threshold: int
+) -> np.ndarray:
+    dists = hamming_dist_packed(a_arr, b_arr, axis)
+    return np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
+
+
+@total_ordering
+class MaxType:
+    def __le__(self, other):
+        return False
+
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return id(self)
+
+    def __repr__(self):
+        return "Max"
+
+
+Max = MaxType()
+
+
+def pd_sort_groups_by_first_row(
+    df: pd.DataFrame, group_by_column: str, sort_by_column: str, ascending: bool = True
+) -> pd.DataFrame:
+    idx = df.groupby(group_by_column).nth(0).sort_values(sort_by_column, ascending=ascending, kind="stable").index
+    return df.loc[idx]
 
 
 def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> datetime:
