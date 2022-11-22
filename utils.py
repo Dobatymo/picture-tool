@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import piexif
 from genutility.numpy import hamming_dist_packed
+from pandas._typing import ValueKeyFunc
 
 
 def with_stem(path: Path, stem: str) -> Path:
@@ -39,10 +40,32 @@ Max = MaxType()
 
 
 def pd_sort_groups_by_first_row(
-    df: pd.DataFrame, group_by_column: str, sort_by_column: str, ascending: bool = True
+    df: pd.DataFrame,
+    group_by_column: str,
+    sort_by_column: str,
+    ascending: bool = True,
+    kind: str = "stable",
+    key: ValueKeyFunc = None,
 ) -> pd.DataFrame:
-    idx = df.groupby(group_by_column).nth(0).sort_values(sort_by_column, ascending=ascending, kind="stable").index
+    """Sort groups by first row, leave order within groups intact."""
+
+    idx = df.groupby(group_by_column).nth(0).sort_values(sort_by_column, ascending=ascending, kind=kind, key=key).index
     return df.loc[idx]
+
+
+def pd_sort_within_group(
+    df: pd.DataFrame,
+    group_by_column: str,
+    sort_by_column: str,
+    ascending: bool = True,
+    kind: str = "stable",
+    key: ValueKeyFunc = None,
+) -> pd.DataFrame:
+    """Sort rows within groups, leave the order of the groups intact."""
+
+    return df.groupby(group_by_column, group_keys=False).apply(
+        lambda x: x.sort_values(sort_by_column, ascending=ascending, kind=kind, key=key)
+    )
 
 
 def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> datetime:
