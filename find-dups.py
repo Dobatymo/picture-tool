@@ -41,14 +41,13 @@ from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
 from genutility.iter import progress
 from genutility.json import read_json
-from genutility.numpy import hamming_dist_packed
 from genutility.time import MeasureTime
 from genutility.typing import CsvWriter
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from PIL.IptcImagePlugin import getiptcinfo
 
 from npmp import ChunkedParallel, SharedNdarray
-from utils import get_exif_dates
+from utils import get_exif_dates, hamming_duplicates_chunk
 
 HEIF_EXTENSIONS = (".heic", ".heif")
 JPEG_EXTENSIONS = (".jpg", ".jpeg")
@@ -202,13 +201,6 @@ def initializer_worker(extensions: Collection[str]) -> None:
         from pillow_heif import register_heif_opener
 
         register_heif_opener()
-
-
-def hamming_duplicates_chunk(
-    a_arr: np.ndarray, b_arr: np.ndarray, coords: Shape, axis: int, hamming_threshold: int
-) -> np.ndarray:
-    dists = hamming_dist_packed(a_arr, b_arr, axis)
-    return np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
 
 
 def hamming_duplicates(sharr: SharedNdarray, chunkshape: Shape, hamming_threshold: int) -> Collection[np.ndarray]:
