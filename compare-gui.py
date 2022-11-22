@@ -121,6 +121,18 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         self.pm = pm
         self.scale()
 
+    @property
+    def fit_to_widget(self) -> bool:
+        return self._fit_to_widget
+
+    @fit_to_widget.setter
+    def fit_to_widget(self, value: bool) -> None:
+        self._fit_to_widget = value
+        if self.pm is not None:
+            self.scale()
+
+    # qt virtual
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
 
         # The label doesn't get `resizeEvent`s when `QScrollArea.widgetResizable()` is False.
@@ -131,16 +143,6 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         if self.pm is not None and self.fit_to_widget:
             self.scale()
         super().resizeEvent(event)
-
-    @property
-    def fit_to_widget(self) -> bool:
-        return self._fit_to_widget
-
-    @fit_to_widget.setter
-    def fit_to_widget(self, value: bool) -> None:
-        self._fit_to_widget = value
-        if self.pm is not None:
-            self.scale()
 
 
 def slice_to_list(value: slice):
@@ -336,6 +338,20 @@ class GroupedPictureView(QtWidgets.QTableView):
     def get_row_by_index(self, index: QtCore.QModelIndex) -> pd.Series:
         return self.model().get(index.row())
 
+    def open_file(self, index: QtCore.QModelIndex) -> None:
+        path = self.get_row_by_index(index)["path"]
+        open_using_default_app(path)
+
+    def make_reference(self, index: QtCore.QModelIndex) -> None:
+        self.model().set_checked(index.row(), False)
+        self.model().set_reference(index.row())
+
+    def open_directory(self, index: QtCore.QModelIndex) -> None:
+        path = self.get_row_by_index(index)["path"]
+        show_in_file_manager(path)
+
+    # qt virtual
+
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
         index = self.indexAt(event.pos())
         if not index.isValid():
@@ -359,17 +375,107 @@ class GroupedPictureView(QtWidgets.QTableView):
         contextMenu.addAction(reference_action)
         contextMenu.exec_(event.globalPos())
 
-    def open_file(self, index: QtCore.QModelIndex) -> None:
-        path = self.get_row_by_index(index)["path"]
-        open_using_default_app(path)
 
-    def make_reference(self, index: QtCore.QModelIndex) -> None:
-        self.model().set_checked(index.row(), False)
-        self.model().set_reference(index.row())
+class ReprioritizeWidget(QtWidgets.QWidget):
+    def __init__(self, df, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.df = df
 
-    def open_directory(self, index: QtCore.QModelIndex) -> None:
-        path = self.get_row_by_index(index)["path"]
-        show_in_file_manager(path)
+        self.dtypefuncs = {
+            "object": ["Available", "Length", "Match regex"],
+            "int32": ["Available", "Length"],
+            "int64": ["Available", "Value"],
+        }
+
+        self.funcsargs = {
+            "Available": 0,
+            "Length": 0,
+            "Value": 0,
+            "Match regex": 1,
+        }
+
+        self.dropdown1 = QtWidgets.QComboBox(self)
+        self.dropdown1.addItems(df.columns)
+        self.dropdown1.currentIndexChanged.connect(self.on_dropdown_col_changed)
+        self.dropdown2 = QtWidgets.QComboBox(self)
+        self.dropdown2.currentIndexChanged.connect(self.on_dropdown_func_change)
+        self.dropdown3 = QtWidgets.QComboBox(self)
+        self.dropdown3.addItems(["Ascending", "Descending"])
+        self.lineedit = QtWidgets.QLineEdit(self)
+        self.button_add = QtWidgets.QPushButton("&Add", self)
+        self.button_add.clicked.connect(self.on_add)
+
+        self.buttons = QtWidgets.QHBoxLayout()
+        self.buttons.addWidget(self.dropdown1)
+        self.buttons.addWidget(self.dropdown2)
+        self.buttons.addWidget(self.lineedit)
+        self.buttons.addWidget(self.dropdown3)
+        self.buttons.addWidget(self.button_add)
+
+        self.listview = QtWidgets.QListWidget(self)
+        self.listview.setMovement(QtWidgets.QListView.Free)
+        self.listview.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.listview.setSortingEnabled(False)
+        self.listview.setDragEnabled(True)
+        self.listview.setDropIndicatorShown(True)
+        self.listview.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+        # self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.addLayout(self.buttons)
+        self.layout.addWidget(self.listview)
+
+        self.on_dropdown_col_changed(0)  # init to first
+        # self.on_dropdown_func_change(0)  # init to first
+
+    # callbacks
+
+    def on_add(self):
+        out = (
+            self.dropdown1.currentIndex(),
+            self.dropdown1.currentText(),
+            self.dropdown2.currentIndex(),
+            self.dropdown2.currentText(),
+            self.dropdown3.currentIndex(),
+            self.dropdown3.currentText(),
+        )
+        self.listview.addItem(str(out))
+
+    def on_dropdown_col_changed(self, index: int) -> None:
+        if self.dropdown1.count() > 0:
+            dtype = self.df.dtypes[index]
+            funcs = self.dtypefuncs[str(dtype)]
+            self.dropdown2.clear()
+            self.dropdown2.addItems(funcs)
+
+    def on_dropdown_func_change(self, index: int) -> None:
+        if self.dropdown2.count() > 0:
+            func = self.dropdown2.itemText(index)
+            args = self.funcsargs[func]
+            if args == 0:
+                self.lineedit.setEnabled(False)
+            else:
+                self.lineedit.setEnabled(True)
+
+    # qt virtual
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.matches(QtGui.QKeySequence.Delete):
+            for item in self.listview.selectedItems():
+                self.listview.takeItem(self.listview.row(item))
+            event.accept()
+        else:
+            event.ignore()
+
+
+class ReprioritizeWindow(QtWidgets.QMainWindow):
+    def __init__(
+        self, df, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags()
+    ) -> None:
+        super().__init__(parent, flags)
+
+        self.reprioritize_widget = ReprioritizeWidget(df)
+        self.setCentralWidget(self.reprioritize_widget)
 
 
 class PictureWidget(QtWidgets.QWidget):
@@ -420,9 +526,6 @@ class PictureWidget(QtWidgets.QWidget):
             self.picture_checked.emit(self.pic_group, self.pic_path, False)
             self.picture_reference.emit(self.pic_group, self.pic_path)
 
-    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-        event.ignore()
-
     @property
     def fit_to_window(self) -> bool:
         return self._fit_to_window
@@ -471,6 +574,11 @@ class PictureWidget(QtWidgets.QWidget):
             self.pic_group = None
             self.pic_path = None
             return False
+
+    # qt virtual
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        event.ignore()
 
 
 class PictureWindow(QtWidgets.QMainWindow):
@@ -521,6 +629,8 @@ class PictureWindow(QtWidgets.QMainWindow):
 
     def onNormalizeScale(self, checked: bool) -> None:
         print("not implemented yet", checked)
+
+    # qt virtual
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.hide()
@@ -613,6 +723,10 @@ class TableWindow(QtWidgets.QMainWindow):
         button_exit.setStatusTip("Close the application")
         button_exit.triggered.connect(self.onExit)
 
+        button_reprioritize = QtWidgets.QAction("&Reprioritize", self)
+        button_reprioritize.setStatusTip("Sort files within groups")
+        button_reprioritize.triggered.connect(self.onReprioritize)
+
         button_fullscreen = QtWidgets.QAction("&Fullscreen", self)
         button_fullscreen.setCheckable(True)
         button_fullscreen.setChecked(False)
@@ -628,10 +742,18 @@ class TableWindow(QtWidgets.QMainWindow):
         file_menu.addAction(button_save)
         file_menu.addAction(button_exit)
 
+        edit_menu = menu.addMenu("&Edit")
+        edit_menu.addAction(button_reprioritize)
+
         view_menu = menu.addMenu("&View")
         view_menu.addAction(button_fullscreen)
 
         self.picture_window.request_on_top.connect(self.onTop)
+
+    def load_csv(self, path: str) -> None:
+        self.table.load_csv(path)
+
+    # qt callbacks
 
     def onTop(self, checked: bool) -> None:
         parent = self if checked else None
@@ -674,8 +796,12 @@ class TableWindow(QtWidgets.QMainWindow):
             assert self.filename  # for mypy
             self.table.to_csv(self.filename)
 
-    def load_csv(self, path: str) -> None:
-        self.table.load_csv(path)
+    def onReprioritize(self) -> None:
+        df = self.table.model.df
+        df = pd.DataFrame({"group": [1], "path": ["file.ext"], "filesize": [123]}).set_index("group")
+        reprioritize_window = ReprioritizeWindow(df, parent=self)
+        reprioritize_window.setWindowTitle("Reprioritize")
+        reprioritize_window.show()
 
     def onExit(self, checked: bool) -> None:
         self.close()
@@ -685,6 +811,8 @@ class TableWindow(QtWidgets.QMainWindow):
             self.showFullScreen()
         else:
             self.showNormal()
+
+    # qt virtual
 
     def closeEvent(self, event) -> None:
         if self.table.has_data():

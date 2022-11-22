@@ -7,7 +7,14 @@ import numpy as np
 import pandas as pd
 from genutility.test import parametrize
 
-from utils import Max, hamming_duplicates_chunk, make_datetime, pd_sort_groups_by_first_row, with_stem
+from utils import (
+    Max,
+    hamming_duplicates_chunk,
+    make_datetime,
+    pd_sort_groups_by_first_row,
+    pd_sort_within_group,
+    with_stem,
+)
 
 
 class TestUtils(unittest.TestCase):
@@ -35,6 +42,76 @@ class TestUtils(unittest.TestCase):
 
         truth = pd.DataFrame({"group": [2, 2, 1, 1], "value": [4, 3, 2, 1]}).set_index("group")
         result = pd_sort_groups_by_first_row(df, "group", "value", False)
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_groups_by_first_row_stable(self):
+        df = pd.DataFrame({"group": [1, 2, 3, 4], "value": [1, 1, 2, 1]}).set_index("group")
+
+        truth = pd.DataFrame({"group": [1, 2, 4, 3], "value": [1, 1, 1, 2]}).set_index("group")
+        result = pd_sort_groups_by_first_row(df, "group", "value", True, "stable")
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [3, 1, 2, 4], "value": [2, 1, 1, 1]}).set_index("group")
+        result = pd_sort_groups_by_first_row(df, "group", "value", False, "stable")
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_groups_by_first_row_not_stable(self):
+        df = pd.DataFrame({"group": [1, 2, 3, 4], "value": [1, 1, 2, 1]}).set_index("group")
+
+        truth = pd.DataFrame({"group": [2, 1, 4, 3], "value": [1, 1, 1, 2]}).set_index("group")
+        result = pd_sort_groups_by_first_row(df, "group", "value", True, "heapsort")
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [3, 1, 2, 4], "value": [2, 1, 1, 1]}).set_index("group")
+        result = pd_sort_groups_by_first_row(df, "group", "value", False, "heapsort")
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_within_group(self):
+        df = pd.DataFrame({"group": [], "value": []}).set_index("group")
+        truth = df
+        result = pd_sort_within_group(df, "group", "value", True)
+        pd.testing.assert_frame_equal(truth, result)
+
+        df = pd.DataFrame({"group": [1, 1, 2, 2], "value": [1, 2, 3, 4]}).set_index("group")
+
+        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [1, 2, 3, 4]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", True)
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [2, 1, 4, 3]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", False)
+        pd.testing.assert_frame_equal(truth, result)
+
+        df = pd.DataFrame({"group": [1, 1, 2, 2], "value": [2, 1, 4, 3]}).set_index("group")
+
+        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [1, 2, 3, 4]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", True)
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [2, 1, 4, 3]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", False)
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_within_group_stable(self):
+        df = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [1, 2, 3]}).set_index("group")
+
+        truth = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [1, 2, 3]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", True, "stable")
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 1], "value": [2, 1, 1], "extra": [3, 1, 2]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", False, "stable")
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_within_group_not_stable(self):
+        df = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [1, 2, 3]}).set_index("group")
+
+        truth = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [2, 1, 3]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", True, "heapsort")
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 1], "value": [2, 1, 1], "extra": [3, 1, 2]}).set_index("group")
+        result = pd_sort_within_group(df, "group", "value", False, "heapsort")
         pd.testing.assert_frame_equal(truth, result)
 
     @parametrize(
