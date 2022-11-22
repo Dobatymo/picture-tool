@@ -1,15 +1,14 @@
 import logging
 from datetime import datetime, time, timezone
 from os import fspath
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import piexif
 from genutility.pillow import NoActionNeeded, fix_orientation, write_text
 from PIL import Image
 
-if TYPE_CHECKING:
-    from pathlib import Path
-    from typing import Any, Dict, Iterable, Optional, Tuple
+from utils import get_exif_dates
 
 logger = logging.getLogger(__name__)
 
@@ -42,32 +41,6 @@ def dt_gps_from_exif(exif):
     return datetime.combine(_date, _time, timezone.utc)
 
 
-def dt_orignal_from_exif(exif):
-    # type: (dict, ) -> datetime
-
-    try:
-        datestr = exif["Exif"][piexif.ExifIFD.DateTimeOriginal].decode("ascii")
-    except KeyError:
-        raise NoDateFound()
-    except UnicodeDecodeError:
-        raise
-
-    return datetime.strptime(datestr, "%Y:%m:%d %H:%M:%S")  # local time
-
-
-def dt_digitized_from_exif(exif):
-    # type: (dict, ) -> datetime
-
-    try:
-        datestr = exif["Exif"][piexif.ExifIFD.DateTimeDigitized].decode("ascii")
-    except KeyError:
-        raise NoDateFound()
-    except UnicodeDecodeError:
-        raise
-
-    return datetime.strptime(datestr, "%Y:%m:%d %H:%M:%S")  # local time
-
-
 def get_original_date(exif, aslocal=True, sources=("exif-original", "exif-digitized", "gps")):
     # type: (dict, bool, Iterable[str]) -> datetime
 
@@ -78,19 +51,27 @@ def get_original_date(exif, aslocal=True, sources=("exif-original", "exif-digiti
             `offset`: timezone offset in hours
     """
 
+    dates = get_exif_dates(exif)
+
     sourcemap = {
-        "exif-original": dt_orignal_from_exif,
-        "exif-digitized": dt_digitized_from_exif,
+        "exif-original": dates.get("original"),
+        "exif-digitized": dates.get("digitized"),
         "gps": dt_gps_from_exif,
     }
 
     for s in sources:
-        func = sourcemap[s]
-        try:
-            dt = func(exif)
-            break
-        except NoDateFound:
+        val = sourcemap[s]
+        if val is None:  # skip
             pass
+        elif isinstance(val, datetime):
+            dt = val
+            break
+        else:  # callable
+            try:
+                dt = val(exif)
+                break
+            except NoDateFound:
+                pass
     else:
         raise NoDateFound()
 

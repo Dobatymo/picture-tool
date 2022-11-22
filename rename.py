@@ -1,10 +1,7 @@
 import logging
-import re
 import sys
 from argparse import ArgumentParser
 from collections import defaultdict
-from datetime import datetime
-from functools import total_ordering
 from os import fspath
 from pathlib import Path
 from typing import Any, DefaultDict, Dict
@@ -13,65 +10,30 @@ import piexif
 import pyexiv2
 from genutility.args import is_dir
 
+from utils import Max, get_exif_dates, with_stem
+
 modelmap = {
     b"iPhone SE (2nd generation)": "iPhone SE 2",
 }
-
-
-@total_ordering
-class MaxType:
-    def __le__(self, other):
-        return False
-
-    def __eq__(self, other):
-        return self is other
-
-    def __hash__(self):
-        return id(self)
-
-    def __repr__(self):
-        return "Max"
-
-
-Max = MaxType()
-
-
-def to_datetime(dt: bytes, offset: bytes, subsec: bytes) -> datetime:
-
-    s = (dt + offset).decode("ascii")
-    _subsec = subsec.decode("ascii")
-
-    m = re.match(r"(\d\d\d\d):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)(\+|\-)(\d\d):(\d\d)", s)
-    assert m
-    ye, mo, da, ho, mi, se, sign, hooff, mioff = m.groups()
-    return datetime.fromisoformat(f"{ye}-{mo}-{da}T{ho}:{mi}:{se}.{_subsec}{sign}{hooff}:{mioff}")
-
-
-def with_stem(path: Path, stem: str) -> Path:
-    return path.with_name(stem + path.suffix)
 
 
 def get_items(path: Path) -> Dict[str, Any]:
 
     exif_dict = piexif.load(fspath(path))
 
-    DateTimeOriginal = exif_dict["Exif"][36867]
-    OffsetTimeOriginal = exif_dict["Exif"][36881]
-    SubsecTimeOriginal = exif_dict["Exif"][37521]
-
     maker = exif_dict["0th"][271].decode("ascii")
     model = exif_dict["0th"][272]
     model = modelmap.get(model, model.decode("ascii"))
-    dt = to_datetime(DateTimeOriginal, OffsetTimeOriginal, SubsecTimeOriginal)
+    dt_orig = get_exif_dates(exif_dict)["original"]
 
     return {
         "filename": path.name,
         "folder": path.parent,
         "maker": maker.replace(" ", "-"),
         "model": model.replace(" ", "-"),
-        "date": dt.date().isoformat(),
-        "time": dt.time().isoformat().replace(":", "-"),
-        "datetime": dt,
+        "date": dt_orig.date().isoformat(),
+        "time": dt_orig.time().isoformat().replace(":", "-"),
+        "datetime": dt_orig,
     }
 
 
@@ -136,9 +98,14 @@ def main() -> None:
         print(groupname)
 
         if args.no_fail_missing:
-            keyfunc = lambda x: x[1].get(args.sort_by, DEFAULT_MISSING)
+
+            def keyfunc(x):
+                return x[1].get(args.sort_by, DEFAULT_MISSING)
+
         else:
-            keyfunc = lambda x: x[1][args.sort_by]
+
+            def keyfunc(x):
+                return x[1][args.sort_by]
 
         try:
             _files = sorted(((path, items) for path, items in files.items()), key=keyfunc)
