@@ -1,12 +1,14 @@
 # pip install pandas pillow pillow-heif PySide2
 
+import json
 import logging
 import os
 import platform
 import subprocess
 import sys
+from datetime import timezone
 from itertools import chain
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -15,11 +17,27 @@ from PIL import Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from utils import pd_sort_groups_by_first_row
+from prioritize import functions
+from utils import pd_sort_groups_by_first_row, pd_sort_within_group_multiple, to_datetime
 
 register_heif_opener()
 
 APP_NAME = "compare-gui"
+
+
+def _example_df():
+    df = pd.DataFrame(
+        {
+            "group": [1, 1, 2],
+            "path": ["file1.ext", "path1/file2.ext", "path2/file3.ext"],
+            "filesize": [123, 200, 0],
+            "mod_date": ["2000-01-01T00:00:00", "", "2000-01-01T01:00:00"],
+        }
+    ).set_index("group")
+    df = df.convert_dtypes(infer_objects=False)
+    df["mod_date"] = to_datetime(df["mod_date"])
+
+    return df
 
 
 def read_qt_pixmap(path: str) -> QtGui.QPixmap:
@@ -283,7 +301,11 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
                 elif col == 1:
                     return to_dos_path(self.df.iat[row, 0])
                 else:
-                    return str(self.df.iat[row, col - 1])
+                    cell = self.df.iat[row, col - 1]
+                    if pd.isna(cell):
+                        return ""
+                    else:
+                        return str(cell)
             except KeyError:
                 logging.warning("Invalid table access at %d, %d", row, col)
 
@@ -376,15 +398,18 @@ class GroupedPictureView(QtWidgets.QTableView):
         contextMenu.exec_(event.globalPos())
 
 
-class ReprioritizeWidget(QtWidgets.QWidget):
+class PrioritizeWidget(QtWidgets.QWidget):
     def __init__(self, df, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.df = df
 
         self.dtypefuncs = {
-            "object": ["Available", "Length", "Match regex"],
-            "int32": ["Available", "Length"],
+            "string": ["Available", "Length", "Match regex", "Match wildcards"],
+            "int32": ["Available", "Value"],
+            "Int32": ["Available", "Value"],
             "int64": ["Available", "Value"],
+            "Int64": ["Available", "Value"],
+            "datetime64[ns]": ["Available", "Value"],
         }
 
         self.funcsargs = {
@@ -392,6 +417,7 @@ class ReprioritizeWidget(QtWidgets.QWidget):
             "Length": 0,
             "Value": 0,
             "Match regex": 1,
+            "Match wildcards": 1,
         }
 
         self.dropdown1 = QtWidgets.QComboBox(self)
@@ -399,18 +425,28 @@ class ReprioritizeWidget(QtWidgets.QWidget):
         self.dropdown1.currentIndexChanged.connect(self.on_dropdown_col_changed)
         self.dropdown2 = QtWidgets.QComboBox(self)
         self.dropdown2.currentIndexChanged.connect(self.on_dropdown_func_change)
+        self.lineedit = QtWidgets.QLineEdit(self)
         self.dropdown3 = QtWidgets.QComboBox(self)
         self.dropdown3.addItems(["Ascending", "Descending"])
-        self.lineedit = QtWidgets.QLineEdit(self)
         self.button_add = QtWidgets.QPushButton("&Add", self)
         self.button_add.clicked.connect(self.on_add)
+        self.button_prioritize = QtWidgets.QPushButton("&Prioritize", self)
+        self.button_prioritize.clicked.connect(self.on_prioritize)
+        self.button_cancel = QtWidgets.QPushButton("&Cancel", self)
+        self.button_cancel.clicked.connect(self.on_cancel)
 
-        self.buttons = QtWidgets.QHBoxLayout()
-        self.buttons.addWidget(self.dropdown1)
-        self.buttons.addWidget(self.dropdown2)
-        self.buttons.addWidget(self.lineedit)
-        self.buttons.addWidget(self.dropdown3)
-        self.buttons.addWidget(self.button_add)
+        self.buttons_top = QtWidgets.QHBoxLayout()
+        self.buttons_top.setContentsMargins(0, 0, 0, 0)
+        self.buttons_top.addWidget(self.dropdown1)
+        self.buttons_top.addWidget(self.dropdown2)
+        self.buttons_top.addWidget(self.lineedit)
+        self.buttons_top.addWidget(self.dropdown3)
+        self.buttons_top.addWidget(self.button_add)
+
+        self.buttons_bottom = QtWidgets.QHBoxLayout()
+        self.buttons_bottom.setContentsMargins(0, 0, 0, 0)
+        self.buttons_bottom.addWidget(self.button_prioritize)
+        self.buttons_bottom.addWidget(self.button_cancel)
 
         self.listview = QtWidgets.QListWidget(self)
         self.listview.setMovement(QtWidgets.QListView.Free)
@@ -421,25 +457,66 @@ class ReprioritizeWidget(QtWidgets.QWidget):
         self.listview.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
 
         self.layout = QtWidgets.QVBoxLayout(self)
-        # self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.addLayout(self.buttons)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.addLayout(self.buttons_top)
         self.layout.addWidget(self.listview)
+        self.layout.addLayout(self.buttons_bottom)
 
         self.on_dropdown_col_changed(0)  # init to first
         # self.on_dropdown_func_change(0)  # init to first
 
+    def get_commands(self) -> List[Dict[str, Any]]:
+        return [json.loads(self.listview.item(item).text()) for item in range(self.listview.count())]
+
     # callbacks
 
+    def on_prioritize(self):
+
+        # sorting by multiple keys, ie. using secondary keys to break ambiguities by the first key,
+        # requires sorting in reverse key order with a stable sorting algorithm
+
+        sorts_kwargs: List[Dict[str, Any]] = []
+
+        for command in reversed(self.get_commands()):
+            col = command["column"]
+            strfunc = command["function"]
+            args = command["args"]
+            ascending = True if command["order"] == "Ascending" else False  # noqa: F841
+
+            dtype = type(self.df.dtypes[self.df.columns.get_loc(col)])
+            func = functions[(dtype, strfunc)]
+
+            argstr = ", ".join(map(repr, args))
+            keyfunc = lambda col: func(col, *args)  # noqa: E731
+
+            try:
+                # df.sort_values() eats exceptions in key function, so test first
+                keyfunc(self.df[col])
+            except ValueError as e:
+                logging.error("Prioritization failed. %s(%s, %s): %s", func.__name__, col, argstr, e)
+                break
+
+            sorts_kwargs.append({"by": col, "ascending": ascending, "key": keyfunc})
+
+        else:  # no break
+            self.df = pd_sort_within_group_multiple(self.df, "group", sorts_kwargs)
+            print(self.df)
+
+    def on_cancel(self):
+        self.close()
+
     def on_add(self):
-        out = (
-            self.dropdown1.currentIndex(),
-            self.dropdown1.currentText(),
-            self.dropdown2.currentIndex(),
-            self.dropdown2.currentText(),
-            self.dropdown3.currentIndex(),
-            self.dropdown3.currentText(),
-        )
-        self.listview.addItem(str(out))
+        args = []
+        if self.lineedit.isEnabled():
+            args.append(self.lineedit.text())
+
+        out = {
+            "column": self.dropdown1.currentText(),
+            "function": self.dropdown2.currentText(),
+            "args": args,
+            "order": self.dropdown3.currentText(),
+        }
+        self.listview.addItem(json.dumps(out))
 
     def on_dropdown_col_changed(self, index: int) -> None:
         if self.dropdown1.count() > 0:
@@ -450,6 +527,7 @@ class ReprioritizeWidget(QtWidgets.QWidget):
 
     def on_dropdown_func_change(self, index: int) -> None:
         if self.dropdown2.count() > 0:
+            self.lineedit.clear()
             func = self.dropdown2.itemText(index)
             args = self.funcsargs[func]
             if args == 0:
@@ -468,14 +546,14 @@ class ReprioritizeWidget(QtWidgets.QWidget):
             event.ignore()
 
 
-class ReprioritizeWindow(QtWidgets.QMainWindow):
+class PrioritizeWindow(QtWidgets.QMainWindow):
     def __init__(
         self, df, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags()
     ) -> None:
         super().__init__(parent, flags)
 
-        self.reprioritize_widget = ReprioritizeWidget(df)
-        self.setCentralWidget(self.reprioritize_widget)
+        self.prioritize_widget = PrioritizeWidget(df)
+        self.setCentralWidget(self.prioritize_widget)
 
 
 class PictureWidget(QtWidgets.QWidget):
@@ -503,6 +581,7 @@ class PictureWidget(QtWidgets.QWidget):
         self.layout.addWidget(self.scroll)
 
         self.buttons = QtWidgets.QHBoxLayout()
+        self.buttons.setContentsMargins(0, 0, 0, 0)
         self.buttons.addWidget(self.button1)
         self.buttons.addWidget(self.button2)
         self.layout.addLayout(self.buttons)
@@ -640,6 +719,7 @@ class PictureWindow(QtWidgets.QMainWindow):
 class TableWidget(QtWidgets.QWidget):
     def __init__(self, picture_window: PictureWindow, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
+        self.assume_input_timezone = "local"
 
         self.picture_window = picture_window
         self.view = GroupedPictureView(parent=self)
@@ -670,18 +750,51 @@ class TableWidget(QtWidgets.QWidget):
     def onRowReference(self, group: int, path: str) -> None:
         self.picture_window.picture.reference_picture(group, path)
 
-    def load_csv(self, path: str) -> None:
-        df = pd.read_csv(
-            path,
-            header=0,
-            keep_default_na=False,
-            parse_dates=["mod_date"],
-            dtype={"priority": "int32", "checked": "bool"},
-        )
+    def read_file(self, path: str) -> None:
+        in_tz = {
+            "local": None,
+            "utc": timezone.utc,
+        }[self.assume_input_timezone]
+
+        if path.endswith(".csv"):
+            df = pd.read_csv(
+                path,
+                header=0,
+                keep_default_na=False,
+                parse_dates=["mod_date"],
+                dtype={
+                    "filesize": "int64",
+                    "width": "Int32",
+                    "height": "Int32",
+                    "priority": "int32",
+                    "checked": "bool",
+                },
+            )
+            df = df.convert_dtypes(infer_objects=False)
+            date_cols = list({c for c in df.columns if "date" in c} - {"mod_date"})
+            for col in date_cols:
+                df[col] = to_datetime(df[col], in_tz)
+
+        elif path.endswith(".parquet"):
+            df = pd.read_parquet(path).reset_index()
+        elif path.endswith(".json"):
+            df = pd.read_json(path, "table")
+        else:
+            raise ValueError(f"Invalid file extension: {path}")
+
         self.model.load_df(df)
 
-    def to_csv(self, path: str) -> None:
-        self.model.df.to_csv(path)
+    def to_file(self, path: str) -> None:
+        if path.endswith(".csv"):
+            self.model.df.to_csv(path)
+        elif path.endswith(".parquet"):
+            self.model.df.to_parquet(path)
+        elif path.endswith(".json"):
+            # fixme: to_json drops timezone info from datetimes
+            # https://github.com/pandas-dev/pandas/issues/12997
+            self.model.df.to_json(path, "table", force_ascii=False)
+        else:
+            raise ValueError(f"Invalid file extension: {path}")
 
     def has_data(self) -> bool:
         return len(self.model.df) > 0
@@ -723,9 +836,9 @@ class TableWindow(QtWidgets.QMainWindow):
         button_exit.setStatusTip("Close the application")
         button_exit.triggered.connect(self.onExit)
 
-        button_reprioritize = QtWidgets.QAction("&Reprioritize", self)
-        button_reprioritize.setStatusTip("Sort files within groups")
-        button_reprioritize.triggered.connect(self.onReprioritize)
+        button_prioritize = QtWidgets.QAction("&Prioritize", self)
+        button_prioritize.setStatusTip("Sort files within groups")
+        button_prioritize.triggered.connect(self.on_prioritize)
 
         button_fullscreen = QtWidgets.QAction("&Fullscreen", self)
         button_fullscreen.setCheckable(True)
@@ -743,15 +856,15 @@ class TableWindow(QtWidgets.QMainWindow):
         file_menu.addAction(button_exit)
 
         edit_menu = menu.addMenu("&Edit")
-        edit_menu.addAction(button_reprioritize)
+        edit_menu.addAction(button_prioritize)
 
         view_menu = menu.addMenu("&View")
         view_menu.addAction(button_fullscreen)
 
         self.picture_window.request_on_top.connect(self.onTop)
 
-    def load_csv(self, path: str) -> None:
-        self.table.load_csv(path)
+    def read_file(self, path: str) -> None:
+        self.table.read_file(path)
 
     # qt callbacks
 
@@ -773,19 +886,31 @@ class TableWindow(QtWidgets.QMainWindow):
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.ExistingFile)
         dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptOpen)
-        dialog.setMimeTypeFilters(["text/csv"])
+        # dialog.setMimeTypeFilters(["text/csv"])
+        dialog.setNameFilters(
+            [
+                "Data file (*.csv *.parquet *.json)",
+            ]
+        )
         dialog.setViewMode(QtWidgets.QFileDialog.Detail)
 
         if dialog.exec_():
             path = dialog.selectedFiles()[0]
-            self.load_csv(path)
+            self.read_file(path)
 
     def onSave(self, checked: bool) -> None:
 
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
         dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptSave)
-        dialog.setMimeTypeFilters(["text/csv"])
+        # dialog.setMimeTypeFilters(["text/csv"])
+        dialog.setNameFilters(
+            [
+                "CSV file (*.csv)",
+                "Parquet file (*.parquet)",
+                "JSON file (*.json)",
+            ]
+        )
         dialog.setDefaultSuffix("csv")
         dialog.setViewMode(QtWidgets.QFileDialog.Detail)
         if self.filename:
@@ -794,14 +919,18 @@ class TableWindow(QtWidgets.QMainWindow):
         if dialog.exec_():
             self.filename = dialog.selectedFiles()[0]
             assert self.filename  # for mypy
-            self.table.to_csv(self.filename)
+            try:
+                self.table.to_file(self.filename)
+            except ImportError as e:  # no pyarrow or fastparquet
+                logging.error("Missing dependencies for file export: %s", e)
 
-    def onReprioritize(self) -> None:
+    def on_prioritize(self) -> None:
         df = self.table.model.df
-        df = pd.DataFrame({"group": [1], "path": ["file.ext"], "filesize": [123]}).set_index("group")
-        reprioritize_window = ReprioritizeWindow(df, parent=self)
-        reprioritize_window.setWindowTitle("Reprioritize")
-        reprioritize_window.show()
+        df = _example_df()
+
+        prioritize_window = PrioritizeWindow(df, parent=self)
+        prioritize_window.setWindowTitle("Prioritize")
+        prioritize_window.show()
 
     def onExit(self, checked: bool) -> None:
         self.close()
@@ -839,7 +968,7 @@ if __name__ == "__main__":
     from genutility.args import is_file
 
     parser = ArgumentParser()
-    parser.add_argument("--csv-path", type=is_file)
+    parser.add_argument("--in-path", type=is_file, help="Allowed file types are csv, parquet and json")
     args = parser.parse_args()
 
     app = QtWidgets.QApplication([])
@@ -847,8 +976,8 @@ if __name__ == "__main__":
     widget = TableWindow()
     widget.setWindowTitle(APP_NAME)
     widget.resize(800, 600)
-    if args.csv_path:
-        widget.load_csv(args.csv_path)
+    if args.in_path:
+        widget.read_file(args.csv_path)
     widget.show()
 
     sys.exit(app.exec_())

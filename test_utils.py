@@ -1,6 +1,6 @@
 import math
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +13,7 @@ from utils import (
     make_datetime,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
+    to_datetime,
     with_stem,
 )
 
@@ -174,6 +175,26 @@ class TestUtils(unittest.TestCase):
         truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
         result = hamming_duplicates_chunk(a, b, (0, 0), -1, 2)
         np.testing.assert_array_equal(truth, result)
+
+    def test_to_datetime(self):
+        s_aware1 = "2000-01-01T00:00:00.000000+04:00"
+        s_aware2 = "2000-01-01T00:00:00.000001+00:00"
+        s_naive = "2000-01-01T00:00:00"
+        ds = pd.Series([s_aware1, s_aware2, s_naive, ""])
+
+        in_tz = timezone.utc
+        truth = pd.to_datetime(
+            pd.Series(["1999-12-31 20:00:00", "2000-01-01 00:00:00.000001", "2000-01-01 00:00:00", ""])
+        )
+        result = to_datetime(ds, in_tz, timezone.utc)
+        pd.testing.assert_series_equal(truth, result)
+
+        in_tz = timezone(timedelta(hours=10), name="test")
+        truth = pd.to_datetime(
+            pd.Series(["1999-12-31 20:00:00", "2000-01-01 00:00:00.000001", "1999-12-31 14:00:00", ""])
+        )
+        result = to_datetime(ds, in_tz, timezone.utc)
+        pd.testing.assert_series_equal(truth, result)
 
 
 if __name__ == "__main__":
