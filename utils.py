@@ -1,13 +1,31 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from functools import total_ordering
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import piexif
+from dateutil import tz
+from genutility.datetime import is_aware
 from genutility.numpy import hamming_dist_packed
 from pandas._typing import ValueKeyFunc
+
+
+def to_datetime(col: pd.Series, in_tz: Optional[tzinfo] = None, out_tz: Optional[tzinfo] = None) -> datetime:
+    in_tz = in_tz or tz.tzlocal()
+    out = pd.Series(index=col.index, dtype="object")
+    for i in range(len(col)):
+        s = col.iloc[i]
+        if s:
+            dt = datetime.fromisoformat(s)
+            if not is_aware(dt):  # naive
+                dt = dt.replace(tzinfo=in_tz)  # assume timezone
+            dt = dt.astimezone(out_tz).replace(tzinfo=None)  # convert to local time and throw away the timezone
+            out.iloc[i] = dt
+        else:
+            out.iloc[i] = None
+    return pd.to_datetime(out)
 
 
 def with_stem(path: Path, stem: str) -> Path:
@@ -64,8 +82,19 @@ def pd_sort_within_group(
     """Sort rows within groups, leave the order of the groups intact."""
 
     return df.groupby(group_by_column, group_keys=False).apply(
-        lambda x: x.sort_values(sort_by_column, ascending=ascending, kind=kind, key=key)
+        lambda x: x.sort_values(
+            sort_by_column, ascending=ascending, inplace=False, kind=kind, ignore_index=False, key=key
+        )
     )
+
+
+def pd_sort_within_group_multiple(df: pd.DataFrame, group_by_column: str, sort_kwargs: List[Dict[str, Any]]):
+    def multisort(x: pd.DataFrame) -> pd.DataFrame:
+        for kwargs in sort_kwargs:
+            x = x.sort_values(kind="stable", inplace=False, ignore_index=False, **kwargs)
+        return x
+
+    return df.groupby(group_by_column, group_keys=False).apply(multisort)
 
 
 def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> datetime:
