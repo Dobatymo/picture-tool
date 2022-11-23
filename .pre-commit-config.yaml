@@ -42,7 +42,7 @@ repos:
         additional_dependencies:
           - appdirs==1.4.4
           # - face-recognition==1.3.0
-          - genutility[filesdb,numpy,pickle,pillow]==0.0.94
+          - genutility[filesdb,numpy,pickle,pillow]==0.0.96
           - humanize==4.4.0
           - imagehash==4.3.1
           - opencv-python==4.4.0.44
@@ -52,6 +52,7 @@ repos:
           - Pillow==9.2.0
           - pillow-heif==0.7.0
           - pyexiv2==2.7.1
+          - python-dateutil==2.8.2
           - msgpack==1.0.4
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.4.0
