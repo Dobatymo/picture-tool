@@ -13,6 +13,7 @@ from utils import (
     make_datetime,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
+    pd_sort_within_group_multiple,
     to_datetime,
     with_stem,
 )
@@ -113,6 +114,33 @@ class TestUtils(unittest.TestCase):
 
         truth = pd.DataFrame({"group": [1, 1, 1], "value": [2, 1, 1], "extra": [3, 1, 2]}).set_index("group")
         result = pd_sort_within_group(df, "group", "value", False, "heapsort")
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_within_group_multiple(self):
+        df = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]}).set_index("group")
+
+        truth = df
+        result = pd_sort_within_group_multiple(df, "group", [])
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]}).set_index("group")
+        result = pd_sort_within_group_multiple(df, "group", [{"by": "col1", "ascending": True}])
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [2, 1, 1, 2], "col2": [3, 1, 2, 4]}).set_index("group")
+        result = pd_sort_within_group_multiple(df, "group", [{"by": "col1", "ascending": False}])
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [2, 1, 3, 4]}).set_index("group")
+        result = pd_sort_within_group_multiple(
+            df, "group", [{"by": "col2", "ascending": False}, {"by": "col1", "ascending": True}]
+        )
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [2, 1, 1, 2], "col2": [3, 2, 1, 4]}).set_index("group")
+        result = pd_sort_within_group_multiple(
+            df, "group", [{"by": "col1", "ascending": True}, {"by": "col2", "ascending": False}]
+        )
         pd.testing.assert_frame_equal(truth, result)
 
     @parametrize(
