@@ -16,9 +16,16 @@ def str_length(col: pd.Series) -> pd.Series:
     return col.str.len()
 
 
-def str_match(col: pd.Series, pattern: str) -> pd.Series:
+def str_match(col: pd.Series, re_pattern: str) -> pd.Series:
     try:
-        return ~col.str.match(pattern, re.IGNORECASE)
+        return ~col.str.match(re_pattern, re.IGNORECASE)
+    except re.error as e:
+        raise ValueError(f"Regex error: {e}")
+
+
+def str_count(col: pd.Series, re_pattern: str) -> pd.Series:
+    try:
+        return col.str.count(re_pattern, re.IGNORECASE)
     except re.error as e:
         raise ValueError(f"Regex error: {e}")
 
@@ -32,16 +39,12 @@ def int_bool(col: pd.Series) -> pd.Series:
     return col.isnull()
 
 
-def int_value(col: pd.Series) -> pd.Series:
+def value(col: pd.Series) -> pd.Series:
     return col
 
 
 def dt_bool(col: pd.Series) -> pd.Series:
     return col.isnull()
-
-
-def dt_value(col: pd.Series) -> pd.Series:
-    return col
 
 
 np_int32 = type(np.dtype("int32"))
@@ -54,19 +57,21 @@ pd_int64 = Int64Dtype
 
 functions = {
     (pd_string, "Available"): str_bool,
+    (pd_string, "Alphabetical"): value,
     (pd_string, "Length"): str_length,
     (pd_string, "Match regex"): str_match,
     (pd_string, "Match wildcards"): str_fnmatch,
+    (pd_string, "Count regex"): str_count,
     (np_int32, "Available"): int_bool,
     (np_int64, "Available"): int_bool,
     (pd_int32, "Available"): int_bool,
     (pd_int64, "Available"): int_bool,
-    (np_int32, "Value"): int_value,
-    (np_int64, "Value"): int_value,
-    (pd_int32, "Value"): int_value,
-    (pd_int64, "Value"): int_value,
+    (np_int32, "Value"): value,
+    (np_int64, "Value"): value,
+    (pd_int32, "Value"): value,
+    (pd_int64, "Value"): value,
     (np_datetime, "Available"): dt_bool,
-    (np_datetime, "Value"): dt_value,
+    (np_datetime, "Value"): value,
     (pd_datetime, "Available"): dt_bool,
-    (pd_datetime, "Value"): dt_value,
+    (pd_datetime, "Value"): value,
 }

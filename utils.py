@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, tzinfo
 from functools import total_ordering
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -88,7 +88,17 @@ def pd_sort_within_group(
     )
 
 
-def pd_sort_within_group_multiple(df: pd.DataFrame, group_by_column: str, sort_kwargs: List[Dict[str, Any]]):
+class SortValuesKwArgs(TypedDict):
+    by: str
+    ascending: bool
+    key: ValueKeyFunc
+
+
+def pd_sort_within_group_multiple(df: pd.DataFrame, group_by_column: str, sort_kwargs: Sequence[SortValuesKwArgs]):
+    """Sort rows within groups, leave the order of the groups intact.
+    Specify a list of multiple sorting arguments which are applied in order.
+    """
+
     def multisort(x: pd.DataFrame) -> pd.DataFrame:
         for kwargs in sort_kwargs:
             x = x.sort_values(kind="stable", inplace=False, ignore_index=False, **kwargs)

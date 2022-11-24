@@ -18,7 +18,7 @@ from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 
 from prioritize import functions
-from utils import pd_sort_groups_by_first_row, pd_sort_within_group_multiple, to_datetime
+from utils import SortValuesKwArgs, pd_sort_groups_by_first_row, pd_sort_within_group_multiple, to_datetime
 
 register_heif_opener()
 
@@ -404,7 +404,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
         self.df = df
 
         self.dtypefuncs = {
-            "string": ["Available", "Length", "Match regex", "Match wildcards"],
+            "string": ["Available", "Alphabetical", "Length", "Match regex", "Match wildcards", "Count regex"],
             "int32": ["Available", "Value"],
             "Int32": ["Available", "Value"],
             "int64": ["Available", "Value"],
@@ -414,10 +414,12 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
         self.funcsargs = {
             "Available": 0,
+            "Alphabetical": 0,
             "Length": 0,
             "Value": 0,
             "Match regex": 1,
             "Match wildcards": 1,
+            "Count regex": 1,
         }
 
         self.dropdown1 = QtWidgets.QComboBox(self)
@@ -463,19 +465,18 @@ class PrioritizeWidget(QtWidgets.QWidget):
         self.layout.addLayout(self.buttons_bottom)
 
         self.on_dropdown_col_changed(0)  # init to first
-        # self.on_dropdown_func_change(0)  # init to first
 
     def get_commands(self) -> List[Dict[str, Any]]:
         return [json.loads(self.listview.item(item).text()) for item in range(self.listview.count())]
 
     # callbacks
 
-    def on_prioritize(self):
+    def on_prioritize(self) -> None:
 
         # sorting by multiple keys, ie. using secondary keys to break ambiguities by the first key,
         # requires sorting in reverse key order with a stable sorting algorithm
 
-        sorts_kwargs: List[Dict[str, Any]] = []
+        sorts_kwargs: List[SortValuesKwArgs] = []
 
         for command in reversed(self.get_commands()):
             col = command["column"]
@@ -502,10 +503,10 @@ class PrioritizeWidget(QtWidgets.QWidget):
             self.df = pd_sort_within_group_multiple(self.df, "group", sorts_kwargs)
             print(self.df)
 
-    def on_cancel(self):
+    def on_cancel(self) -> None:
         self.close()
 
-    def on_add(self):
+    def on_add(self) -> None:
         args = []
         if self.lineedit.isEnabled():
             args.append(self.lineedit.text())
