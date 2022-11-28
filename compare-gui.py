@@ -6,9 +6,10 @@ import os
 import platform
 import subprocess
 import sys
+from collections import defaultdict
 from datetime import timezone
 from itertools import chain
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,7 @@ from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 
 from prioritize import functions
-from utils import SortValuesKwArgs, pd_sort_groups_by_first_row, pd_sort_within_group_multiple, to_datetime
+from utils import SortValuesKwArgs, pd_sort_groups_by_first_row, pd_sort_within_group, to_datetime
 
 register_heif_opener()
 
@@ -182,23 +183,27 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         df = pd.DataFrame({}, columns=["group", "path"])
         self.load_df(df)
 
-    def load_df(self, df: pd.DataFrame) -> None:
+    def set_df(self, df: pd.DataFrame) -> None:
         self.beginResetModel()
-        self.df = df.set_index("group")
+        self.df = df
+        self.cols = {name: df.columns.get_loc(name) for name in ("priority", "checked")}
+        self.endResetModel()
+
+    def load_df(self, df: pd.DataFrame) -> None:
+        df = df.set_index("group")
 
         if "priority" not in df:
             priority = pd.Series(
-                list(chain.from_iterable(range(i) for i in self.df.groupby("group").count()["path"])),
+                list(chain.from_iterable(range(i) for i in df.groupby("group").count()["path"])),
                 dtype="int32",
             ).values
             assert not isinstance(priority, pd.Series), "Cannot assign series because of wrong index"
-            self.df["priority"] = priority
+            df["priority"] = priority
 
         if "checked" not in df:
-            self.df["checked"] = False
+            df["checked"] = False
 
-        self.cols = {name: self.df.columns.get_loc(name) for name in ("priority", "checked")}
-        self.endResetModel()
+        self.set_df(df)
 
     def get(self, row_idx: int) -> pd.Series:
         return self.df.iloc[row_idx]
@@ -399,18 +404,20 @@ class GroupedPictureView(QtWidgets.QTableView):
 
 
 class PrioritizeWidget(QtWidgets.QWidget):
+    prioritize = QtCore.Signal(pd.DataFrame)
+
+    @staticmethod
+    def get_dtypefuncs(functions: Dict[Tuple[type, str], Callable]) -> Dict[type, List[str]]:
+        dtypefuncs = defaultdict(list)
+        for dtype, name in functions.keys():
+            dtypefuncs[dtype].append(name)
+        return dict(dtypefuncs)
+
     def __init__(self, df, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.df = df
 
-        self.dtypefuncs = {
-            "string": ["Available", "Alphabetical", "Length", "Match regex", "Match wildcards", "Count regex"],
-            "int32": ["Available", "Value"],
-            "Int32": ["Available", "Value"],
-            "int64": ["Available", "Value"],
-            "Int64": ["Available", "Value"],
-            "datetime64[ns]": ["Available", "Value"],
-        }
+        self.dtypefuncs = self.get_dtypefuncs(functions)  # type: ignore[arg-type]
 
         self.funcsargs = {
             "Available": 0,
@@ -434,21 +441,16 @@ class PrioritizeWidget(QtWidgets.QWidget):
         self.button_add.clicked.connect(self.on_add)
         self.button_prioritize = QtWidgets.QPushButton("&Prioritize", self)
         self.button_prioritize.clicked.connect(self.on_prioritize)
-        self.button_cancel = QtWidgets.QPushButton("&Cancel", self)
-        self.button_cancel.clicked.connect(self.on_cancel)
+        self.button_close = QtWidgets.QPushButton("&Close", self)
+        self.button_close.clicked.connect(self.on_close)
 
         self.buttons_top = QtWidgets.QHBoxLayout()
-        self.buttons_top.setContentsMargins(0, 0, 0, 0)
+        self.buttons_top.setSpacing(2)
         self.buttons_top.addWidget(self.dropdown1)
         self.buttons_top.addWidget(self.dropdown2)
         self.buttons_top.addWidget(self.lineedit)
         self.buttons_top.addWidget(self.dropdown3)
         self.buttons_top.addWidget(self.button_add)
-
-        self.buttons_bottom = QtWidgets.QHBoxLayout()
-        self.buttons_bottom.setContentsMargins(0, 0, 0, 0)
-        self.buttons_bottom.addWidget(self.button_prioritize)
-        self.buttons_bottom.addWidget(self.button_cancel)
 
         self.listview = QtWidgets.QListWidget(self)
         self.listview.setMovement(QtWidgets.QListView.Free)
@@ -458,7 +460,13 @@ class PrioritizeWidget(QtWidgets.QWidget):
         self.listview.setDropIndicatorShown(True)
         self.listview.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
 
+        self.buttons_bottom = QtWidgets.QHBoxLayout()
+        self.buttons_bottom.setSpacing(2)
+        self.buttons_bottom.addWidget(self.button_prioritize)
+        self.buttons_bottom.addWidget(self.button_close)
+
         self.layout = QtWidgets.QVBoxLayout(self)
+        self.layout.setSpacing(0)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.addLayout(self.buttons_top)
         self.layout.addWidget(self.listview)
@@ -478,7 +486,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
         sorts_kwargs: List[SortValuesKwArgs] = []
 
-        for command in reversed(self.get_commands()):
+        for command in self.get_commands():
             col = command["column"]
             strfunc = command["function"]
             args = command["args"]
@@ -488,7 +496,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
             func = functions[(dtype, strfunc)]
 
             argstr = ", ".join(map(repr, args))
-            keyfunc = lambda col: func(col, *args)  # noqa: E731
+            keyfunc = lambda col: func(col, *args)  # type: ignore[operator] # noqa: E731
 
             try:
                 # df.sort_values() eats exceptions in key function, so test first
@@ -500,11 +508,11 @@ class PrioritizeWidget(QtWidgets.QWidget):
             sorts_kwargs.append({"by": col, "ascending": ascending, "key": keyfunc})
 
         else:  # no break
-            self.df = pd_sort_within_group_multiple(self.df, "group", sorts_kwargs)
-            print(self.df)
+            self.df = pd_sort_within_group(self.df, "group", sorts_kwargs)
+            self.prioritize.emit(self.df)
 
-    def on_cancel(self) -> None:
-        self.close()
+    def on_close(self) -> None:
+        self.parent().close()
 
     def on_add(self) -> None:
         args = []
@@ -521,8 +529,8 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
     def on_dropdown_col_changed(self, index: int) -> None:
         if self.dropdown1.count() > 0:
-            dtype = self.df.dtypes[index]
-            funcs = self.dtypefuncs[str(dtype)]
+            dtype = type(self.df.dtypes[index])
+            funcs = self.dtypefuncs[dtype]
             self.dropdown2.clear()
             self.dropdown2.addItems(funcs)
 
@@ -553,7 +561,7 @@ class PrioritizeWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent, flags)
 
-        self.prioritize_widget = PrioritizeWidget(df)
+        self.prioritize_widget = PrioritizeWidget(df, parent)
         self.setCentralWidget(self.prioritize_widget)
 
 
@@ -837,9 +845,10 @@ class TableWindow(QtWidgets.QMainWindow):
         button_exit.setStatusTip("Close the application")
         button_exit.triggered.connect(self.onExit)
 
-        button_prioritize = QtWidgets.QAction("&Prioritize", self)
-        button_prioritize.setStatusTip("Sort files within groups")
-        button_prioritize.triggered.connect(self.on_prioritize)
+        self.button_prioritize = QtWidgets.QAction("&Prioritize", self)
+        self.button_prioritize.setStatusTip("Sort files within groups")
+        self.button_prioritize.triggered.connect(self.on_prioritize)
+        self.button_prioritize.setEnabled(False)
 
         button_fullscreen = QtWidgets.QAction("&Fullscreen", self)
         button_fullscreen.setCheckable(True)
@@ -857,7 +866,7 @@ class TableWindow(QtWidgets.QMainWindow):
         file_menu.addAction(button_exit)
 
         edit_menu = menu.addMenu("&Edit")
-        edit_menu.addAction(button_prioritize)
+        edit_menu.addAction(self.button_prioritize)
 
         view_menu = menu.addMenu("&View")
         view_menu.addAction(button_fullscreen)
@@ -866,6 +875,7 @@ class TableWindow(QtWidgets.QMainWindow):
 
     def read_file(self, path: str) -> None:
         self.table.read_file(path)
+        self.button_prioritize.setEnabled(True)
 
     # qt callbacks
 
@@ -926,12 +936,13 @@ class TableWindow(QtWidgets.QMainWindow):
                 logging.error("Missing dependencies for file export: %s", e)
 
     def on_prioritize(self) -> None:
-        df = self.table.model.df
-        df = _example_df()
-
-        prioritize_window = PrioritizeWindow(df, parent=self)
+        prioritize_window = PrioritizeWindow(self.table.model.df, parent=self)
+        prioritize_window.prioritize_widget.prioritize.connect(self.on_prioritize_done)
         prioritize_window.setWindowTitle("Prioritize")
         prioritize_window.show()
+
+    def on_prioritize_done(self, df: pd.DataFrame) -> None:
+        self.table.model.set_df(df)
 
     def onExit(self, checked: bool) -> None:
         self.close()
