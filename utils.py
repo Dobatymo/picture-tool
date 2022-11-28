@@ -71,40 +71,67 @@ def pd_sort_groups_by_first_row(
     return df.loc[idx]
 
 
-def pd_sort_within_group(
-    df: pd.DataFrame,
-    group_by_column: str,
-    sort_by_column: str,
-    ascending: bool = True,
-    kind: str = "stable",
-    key: ValueKeyFunc = None,
-) -> pd.DataFrame:
-    """Sort rows within groups, leave the order of the groups intact."""
-
-    return df.groupby(group_by_column, group_keys=False).apply(
-        lambda x: x.sort_values(
-            sort_by_column, ascending=ascending, inplace=False, kind=kind, ignore_index=False, key=key
-        )
-    )
-
-
 class SortValuesKwArgs(TypedDict):
     by: str
     ascending: bool
     key: ValueKeyFunc
 
 
-def pd_sort_within_group_multiple(df: pd.DataFrame, group_by_column: str, sort_kwargs: Sequence[SortValuesKwArgs]):
+def pd_sort_within_group_slow(
+    df: pd.DataFrame, group_by_column: str, sort_kwargs: Sequence[SortValuesKwArgs], sort_groups: bool = False
+):
     """Sort rows within groups, leave the order of the groups intact.
     Specify a list of multiple sorting arguments which are applied in order.
     """
 
     def multisort(x: pd.DataFrame) -> pd.DataFrame:
-        for kwargs in sort_kwargs:
+        for kwargs in reversed(sort_kwargs):
             x = x.sort_values(kind="stable", inplace=False, ignore_index=False, **kwargs)
         return x
 
-    return df.groupby(group_by_column, group_keys=False).apply(multisort)
+    return df.groupby(group_by_column, group_keys=True, sort=sort_groups).apply(multisort)
+
+
+def pd_sort_within_group(
+    df: pd.DataFrame, group_by: str, sort_kwargs: Sequence[SortValuesKwArgs], sort_groups: bool = False
+):
+    """Sort rows within groups, leave the order of the groups intact.
+    Specify a list of multiple sorting arguments which are applied in order.
+    `group_by`: can be a column name or index level name
+    """
+
+    is_index = group_by in df.index.names
+    is_column = group_by in df.columns
+
+    if is_index and is_column:
+        raise ValueError(f"Ambigus name: {group_by}")
+    elif not is_index and not is_column:
+        raise ValueError(f"Invalid name: {group_by}")
+
+    if not sort_groups:
+        if not is_index:
+            df = df.set_index(group_by, drop=True, append=True)
+
+        idx = df.index.get_level_values(group_by).unique()
+
+    for kwargs in reversed(sort_kwargs):
+        df = df.sort_values(kind="stable", inplace=False, ignore_index=False, **kwargs)
+
+    if sort_groups:
+        if is_index:
+            return df.sort_index(level=group_by, kind="stable")
+        else:
+            return df.sort_values(group_by, kind="stable")
+    else:
+        if df.index.nlevels == 1:
+            multiidx = idx
+        else:
+            multiidx = (slice(None),) * (df.index.nlevels - 1) + (idx,)
+
+        df = df.loc[multiidx, :]
+        if not is_index:
+            df = df.reset_index(group_by, drop=False)
+        return df
 
 
 def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> datetime:

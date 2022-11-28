@@ -49,6 +49,7 @@ def dt_bool(col: pd.Series) -> pd.Series:
 
 np_int32 = type(np.dtype("int32"))
 np_int64 = type(np.dtype("int64"))
+np_bool = type(np.dtype("bool_"))
 np_datetime = type(np.dtype("datetime64"))
 pd_string = StringDtype
 pd_datetime = DatetimeTZDtype
@@ -74,4 +75,5 @@ functions = {
     (np_datetime, "Value"): value,
     (pd_datetime, "Available"): dt_bool,
     (pd_datetime, "Value"): value,
+    (np_bool, "Value"): value,
 }

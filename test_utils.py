@@ -13,7 +13,7 @@ from utils import (
     make_datetime,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
-    pd_sort_within_group_multiple,
+    pd_sort_within_group_slow,
     to_datetime,
     with_stem,
 )
@@ -68,80 +68,89 @@ class TestUtils(unittest.TestCase):
         result = pd_sort_groups_by_first_row(df, "group", "value", False, "heapsort")
         pd.testing.assert_frame_equal(truth, result)
 
-    def test_pd_sort_within_group(self):
-        df = pd.DataFrame({"group": [], "value": []}).set_index("group")
-        truth = df
-        result = pd_sort_within_group(df, "group", "value", True)
-        pd.testing.assert_frame_equal(truth, result)
+    def test_pd_sort_within_group_index(self):
 
-        df = pd.DataFrame({"group": [1, 1, 2, 2], "value": [1, 2, 3, 4]}).set_index("group")
-
-        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [1, 2, 3, 4]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", True)
-        pd.testing.assert_frame_equal(truth, result)
-
-        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [2, 1, 4, 3]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", False)
-        pd.testing.assert_frame_equal(truth, result)
-
-        df = pd.DataFrame({"group": [1, 1, 2, 2], "value": [2, 1, 4, 3]}).set_index("group")
-
-        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [1, 2, 3, 4]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", True)
-        pd.testing.assert_frame_equal(truth, result)
-
-        truth = pd.DataFrame({"group": [1, 1, 2, 2], "value": [2, 1, 4, 3]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", False)
-        pd.testing.assert_frame_equal(truth, result)
-
-    def test_pd_sort_within_group_stable(self):
-        df = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [1, 2, 3]}).set_index("group")
-
-        truth = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [1, 2, 3]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", True, "stable")
-        pd.testing.assert_frame_equal(truth, result)
-
-        truth = pd.DataFrame({"group": [1, 1, 1], "value": [2, 1, 1], "extra": [3, 1, 2]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", False, "stable")
-        pd.testing.assert_frame_equal(truth, result)
-
-    def test_pd_sort_within_group_not_stable(self):
-        df = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [1, 2, 3]}).set_index("group")
-
-        truth = pd.DataFrame({"group": [1, 1, 1], "value": [1, 1, 2], "extra": [2, 1, 3]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", True, "heapsort")
-        pd.testing.assert_frame_equal(truth, result)
-
-        truth = pd.DataFrame({"group": [1, 1, 1], "value": [2, 1, 1], "extra": [3, 1, 2]}).set_index("group")
-        result = pd_sort_within_group(df, "group", "value", False, "heapsort")
-        pd.testing.assert_frame_equal(truth, result)
-
-    def test_pd_sort_within_group_multiple(self):
         df = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]}).set_index("group")
 
         truth = df
-        result = pd_sort_within_group_multiple(df, "group", [])
+        result = pd_sort_within_group(df, "group", [])
+        pd.testing.assert_frame_equal(truth, result)
+        result = pd_sort_within_group_slow(df, "group", [])
         pd.testing.assert_frame_equal(truth, result)
 
-        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]}).set_index("group")
-        result = pd_sort_within_group_multiple(df, "group", [{"by": "col1", "ascending": True}])
+        truth = df
+        result = pd_sort_within_group(df, "group", [{"by": "col1", "ascending": True}])
+        pd.testing.assert_frame_equal(truth, result)
+        result = pd_sort_within_group_slow(df, "group", [{"by": "col1", "ascending": True}])
         pd.testing.assert_frame_equal(truth, result)
 
         truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [2, 1, 1, 2], "col2": [3, 1, 2, 4]}).set_index("group")
-        result = pd_sort_within_group_multiple(df, "group", [{"by": "col1", "ascending": False}])
+        result = pd_sort_within_group(df, "group", [{"by": "col1", "ascending": False}])
+        pd.testing.assert_frame_equal(truth, result)
+        result = pd_sort_within_group_slow(df, "group", [{"by": "col1", "ascending": False}])
         pd.testing.assert_frame_equal(truth, result)
 
         truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [2, 1, 3, 4]}).set_index("group")
-        result = pd_sort_within_group_multiple(
-            df, "group", [{"by": "col2", "ascending": False}, {"by": "col1", "ascending": True}]
+        result = pd_sort_within_group(
+            df, "group", [{"by": "col1", "ascending": True}, {"by": "col2", "ascending": False}]
+        )
+        pd.testing.assert_frame_equal(truth, result)
+        result = pd_sort_within_group_slow(
+            df, "group", [{"by": "col1", "ascending": True}, {"by": "col2", "ascending": False}]
         )
         pd.testing.assert_frame_equal(truth, result)
 
         truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [2, 1, 1, 2], "col2": [3, 2, 1, 4]}).set_index("group")
-        result = pd_sort_within_group_multiple(
-            df, "group", [{"by": "col1", "ascending": True}, {"by": "col2", "ascending": False}]
+        result = pd_sort_within_group(
+            df, "group", [{"by": "col2", "ascending": False}, {"by": "col1", "ascending": True}]
         )
         pd.testing.assert_frame_equal(truth, result)
+        result = pd_sort_within_group_slow(
+            df, "group", [{"by": "col2", "ascending": False}, {"by": "col1", "ascending": True}]
+        )
+        pd.testing.assert_frame_equal(truth, result)
+
+    def test_pd_sort_within_group_column(self):
+
+        df = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]})
+
+        truth = df
+        result = pd_sort_within_group(df, "group", [])
+        pd.testing.assert_frame_equal(truth, result)
+        result = pd_sort_within_group_slow(df, "group", [])
+        pd.testing.assert_frame_equal(truth, result)
+
+        truth = df
+        result = pd_sort_within_group(df, "group", [{"by": "col1", "ascending": True}])
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+        result = pd_sort_within_group_slow(df, "group", [{"by": "col1", "ascending": True}])
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [2, 1, 1, 2], "col2": [3, 1, 2, 4]})
+        result = pd_sort_within_group(df, "group", [{"by": "col1", "ascending": False}])
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+        result = pd_sort_within_group_slow(df, "group", [{"by": "col1", "ascending": False}])
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [2, 1, 3, 4]})
+        result = pd_sort_within_group(
+            df, "group", [{"by": "col1", "ascending": True}, {"by": "col2", "ascending": False}]
+        )
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+        result = pd_sort_within_group_slow(
+            df, "group", [{"by": "col1", "ascending": True}, {"by": "col2", "ascending": False}]
+        )
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+
+        truth = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [2, 1, 1, 2], "col2": [3, 2, 1, 4]})
+        result = pd_sort_within_group(
+            df, "group", [{"by": "col2", "ascending": False}, {"by": "col1", "ascending": True}]
+        )
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
+        result = pd_sort_within_group_slow(
+            df, "group", [{"by": "col2", "ascending": False}, {"by": "col1", "ascending": True}]
+        )
+        pd.testing.assert_frame_equal(truth, result.reset_index(drop=True))
 
     @parametrize(
         (b"2000:01:01 00:00:00", None, None, datetime.fromisoformat("2000-01-01T00:00:00")),
