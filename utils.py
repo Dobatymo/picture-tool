@@ -67,7 +67,12 @@ def pd_sort_groups_by_first_row(
 ) -> pd.DataFrame:
     """Sort groups by first row, leave order within groups intact."""
 
-    idx = df.groupby(group_by_column).nth(0).sort_values(sort_by_column, ascending=ascending, kind=kind, key=key).index
+    idx = (
+        df.groupby(group_by_column, sort=False, group_keys=False)
+        .nth(0)
+        .sort_values(sort_by_column, ascending=ascending, kind=kind, key=key)
+        .index
+    )
     return df.loc[idx]
 
 
@@ -89,7 +94,13 @@ def pd_sort_within_group_slow(
             x = x.sort_values(kind="stable", inplace=False, ignore_index=False, **kwargs)
         return x
 
-    return df.groupby(group_by_column, group_keys=True, sort=sort_groups).apply(multisort)
+    # set `group_keys` to `True`, otherwise `sort` isn't working...
+    # and even with that fix, the whole thing is broken in pandas<1.5...
+    df = df.groupby(group_by_column, sort=sort_groups, group_keys=True).apply(multisort)
+    # drop column added by `group_keys=True`
+    df = df.reset_index(0, drop=True)
+
+    return df
 
 
 def pd_sort_within_group(
