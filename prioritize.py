@@ -35,15 +35,11 @@ def str_fnmatch(col: pd.Series, fn_pattern: str) -> pd.Series:
     return str_match(col, re_pattern)
 
 
-def int_bool(col: pd.Series) -> pd.Series:
-    return col.isnull()
-
-
-def value(col: pd.Series) -> pd.Series:
+def t_value(col: pd.Series) -> pd.Series:
     return col
 
 
-def dt_bool(col: pd.Series) -> pd.Series:
+def t_bool(col: pd.Series) -> pd.Series:
     return col.isnull()
 
 
@@ -58,22 +54,22 @@ pd_int64 = Int64Dtype
 
 functions = {
     (pd_string, "Available"): str_bool,
-    (pd_string, "Alphabetical"): value,
+    (pd_string, "Alphabetical"): t_value,
     (pd_string, "Length"): str_length,
     (pd_string, "Match regex"): str_match,
     (pd_string, "Match wildcards"): str_fnmatch,
     (pd_string, "Count regex"): str_count,
-    (np_int32, "Available"): int_bool,
-    (np_int64, "Available"): int_bool,
-    (pd_int32, "Available"): int_bool,
-    (pd_int64, "Available"): int_bool,
-    (np_int32, "Value"): value,
-    (np_int64, "Value"): value,
-    (pd_int32, "Value"): value,
-    (pd_int64, "Value"): value,
-    (np_datetime, "Available"): dt_bool,
-    (np_datetime, "Value"): value,
-    (pd_datetime, "Available"): dt_bool,
-    (pd_datetime, "Value"): value,
-    (np_bool, "Value"): value,
+    (np_int32, "Available"): t_bool,
+    (np_int64, "Available"): t_bool,
+    (pd_int32, "Available"): t_bool,
+    (pd_int64, "Available"): t_bool,
+    (np_int32, "Value"): t_value,
+    (np_int64, "Value"): t_value,
+    (pd_int32, "Value"): t_value,
+    (pd_int64, "Value"): t_value,
+    (np_datetime, "Available"): t_bool,
+    (np_datetime, "Value"): t_value,
+    (pd_datetime, "Available"): t_bool,
+    (pd_datetime, "Value"): t_value,
+    (np_bool, "Value"): t_value,
 }

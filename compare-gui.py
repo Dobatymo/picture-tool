@@ -7,13 +7,16 @@ import platform
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import timezone
+from datetime import timedelta, timezone
+from inspect import signature
 from itertools import chain
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import humanize
 import numpy as np
 import pandas as pd
 from genutility._files import to_dos_path
+from genutility.time import MeasureTime
 from PIL import Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
@@ -26,19 +29,23 @@ register_heif_opener()
 APP_NAME = "compare-gui"
 
 
-def _example_df():
-    df = pd.DataFrame(
-        {
-            "group": [1, 1, 2],
-            "path": ["file1.ext", "path1/file2.ext", "path2/file3.ext"],
-            "filesize": [123, 200, 0],
-            "mod_date": ["2000-01-01T00:00:00", "", "2000-01-01T01:00:00"],
-        }
-    ).set_index("group")
-    df = df.convert_dtypes(infer_objects=False)
-    df["mod_date"] = to_datetime(df["mod_date"])
+def cumsum(arr: np.ndarray) -> np.ndarray:
+    out = np.empty_like(arr)
+    out[0] = 0
+    out[1:] = np.cumsum(arr[:-1])
+    return out
 
-    return df
+
+def get_priorities(df: pd.DataFrame) -> np.ndarray:
+    return pd.Series(
+        list(chain.from_iterable(range(i) for i in df.groupby("group").count()["path"])),
+        dtype="int32",
+    ).values
+
+
+def set_reference_unchecked(df: pd.DataFrame) -> None:
+    idx = cumsum(df.groupby("group").count()["path"].values)
+    df.iloc[idx, df.columns.get_loc("checked")] = False
 
 
 def read_qt_pixmap(path: str) -> QtGui.QPixmap:
@@ -128,7 +135,7 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         assert self.pm is not None
         return self.pm.scaled(size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
 
-    def scale(self):
+    def scale(self) -> None:
         assert self.pm is not None
         if self.fit_to_widget:
             super().setPixmap(self.scaledPixmap(self.size()))
@@ -164,11 +171,11 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         super().resizeEvent(event)
 
 
-def slice_to_list(value: slice):
+def slice_to_list(value: slice) -> list:
     return list(range(value.stop)[value])
 
 
-def iloc_by_index_and_bool(df, index, bool_idx) -> int:
+def iloc_by_index_and_bool(df, index: int, bool_idx: pd.Series) -> int:
     ilocs = np.array(slice_to_list(df.index.get_loc(index)))[bool_idx]
     assert len(ilocs) == 1
     return ilocs[0].item()
@@ -186,30 +193,32 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
     def set_df(self, df: pd.DataFrame) -> None:
         self.beginResetModel()
         self.df = df
-        self.cols = {name: df.columns.get_loc(name) for name in ("priority", "checked")}
         self.endResetModel()
 
-    def load_df(self, df: pd.DataFrame) -> None:
+    def load_df(self, df: pd.DataFrame) -> Tuple[int, int]:
         df = df.set_index("group")
 
         if "priority" not in df:
-            priority = pd.Series(
-                list(chain.from_iterable(range(i) for i in df.groupby("group").count()["path"])),
-                dtype="int32",
-            ).values
+            priority = get_priorities(df)
             assert not isinstance(priority, pd.Series), "Cannot assign series because of wrong index"
             df["priority"] = priority
 
         if "checked" not in df:
             df["checked"] = False
+        else:
+            set_reference_unchecked(df)
 
         self.set_df(df)
+
+        num_files = len(df)
+        num_groups = len(df.groupby("group").count())
+        return num_files, num_groups
 
     def get(self, row_idx: int) -> pd.Series:
         return self.df.iloc[row_idx]
 
     def set_checked(self, row_idx: int, checked: bool) -> None:
-        col_idx = self.cols["checked"]
+        col_idx = self.df.columns.get_loc("checked")
         self.df.iat[row_idx, col_idx] = checked
         row = self.df.iloc[row_idx]
         group = row.name.item()
@@ -226,7 +235,7 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
     def set_checked_by_file(self, group: int, path: str, checked: bool) -> None:
         idx = self.df.loc[group]["path"] == path
         row = iloc_by_index_and_bool(self.df, group, idx)
-        col = self.cols["checked"]
+        col = self.df.columns.get_loc("checked")
         self.df.iat[row, col] = checked
 
         index = self.createIndex(row, col)
@@ -235,8 +244,8 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
     def set_reference_by_file(self, group: int, path: str) -> None:
         idx = self.df.loc[group]["path"] == path
         new_row = iloc_by_index_and_bool(self.df, group, idx)
-        col_prio = self.cols["priority"]
-        col_check = self.cols["checked"]
+        col_prio = self.df.columns.get_loc("priority")
+        col_check = self.df.columns.get_loc("checked")
         priority = self.df.iat[new_row, col_prio]
         assert priority != 0, "selected row is already the reference"
         idx = self.df.loc[group]["priority"] == 0
@@ -288,7 +297,7 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
 
         row, col = index.row(), index.column()
 
-        if col == 0 and self.df.iat[row, self.cols["priority"]] > 0:
+        if col == 0 and self.df.iat[row, self.df.columns.get_loc("priority")] > 0:
             return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsUserCheckable
 
         return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
@@ -315,8 +324,8 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
                 logging.warning("Invalid table access at %d, %d", row, col)
 
         elif role == QtCore.Qt.CheckStateRole:
-            if col == 0 and self.df.iat[row, self.cols["priority"]] > 0:
-                if self.df.iat[row, self.cols["checked"]]:
+            if col == 0 and self.df.iat[row, self.df.columns.get_loc("priority")] > 0:
+                if self.df.iat[row, self.df.columns.get_loc("checked")]:
                     return QtCore.Qt.Checked
                 else:
                     return QtCore.Qt.Unchecked
@@ -413,21 +422,19 @@ class PrioritizeWidget(QtWidgets.QWidget):
             dtypefuncs[dtype].append(name)
         return dict(dtypefuncs)
 
+    @staticmethod
+    def get_funcsargs(functions: Dict[Tuple[type, str], Callable]) -> Dict[str, int]:
+        funcsargs = {(name, len(signature(func).parameters) - 1) for (dtype, name), func in functions.items()}
+        out = dict(funcsargs)
+        assert len(funcsargs) == len(out)
+        return out
+
     def __init__(self, df, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.df = df
 
         self.dtypefuncs = self.get_dtypefuncs(functions)  # type: ignore[arg-type]
-
-        self.funcsargs = {
-            "Available": 0,
-            "Alphabetical": 0,
-            "Length": 0,
-            "Value": 0,
-            "Match regex": 1,
-            "Match wildcards": 1,
-            "Count regex": 1,
-        }
+        self.funcsargs = self.get_funcsargs(functions)  # type: ignore[arg-type]
 
         self.dropdown1 = QtWidgets.QComboBox(self)
         self.dropdown1.addItems(df.columns)
@@ -509,6 +516,8 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
         else:  # no break
             self.df = pd_sort_within_group(self.df, "group", sorts_kwargs)
+            self.df["priority"] = get_priorities(self.df)
+            set_reference_unchecked(self.df)
             self.prioritize.emit(self.df)
 
     def on_close(self) -> None:
@@ -575,10 +584,10 @@ class PictureWidget(QtWidgets.QWidget):
 
         self.button1 = QtWidgets.QPushButton("&Check", self)
         self.button1.setCheckable(True)
-        self.button1.clicked[bool].connect(self.onCheck)
+        self.button1.clicked[bool].connect(self.on_check)
         self.button2 = QtWidgets.QPushButton("Make &reference", self)
         self.button2.setCheckable(True)
-        self.button2.clicked[bool].connect(self.onMakeReference)
+        self.button2.clicked[bool].connect(self.on_make_reference)
         self.label = AspectRatioPixmapLabel()
 
         self.scroll = QtWidgets.QScrollArea(self)
@@ -601,11 +610,11 @@ class PictureWidget(QtWidgets.QWidget):
         # set properties
         self.fit_to_window = True
 
-    def onCheck(self, checked: bool) -> None:
+    def on_check(self, checked: bool) -> None:
         if self.pic_path is not None:
             self.picture_checked.emit(self.pic_group, self.pic_path, checked)
 
-    def onMakeReference(self, checked: bool) -> None:
+    def on_make_reference(self, checked: bool) -> None:
         assert checked
         self.button1.setChecked(False)
         self.button1.setEnabled(False)
@@ -686,13 +695,13 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_fit_to_window.setCheckable(True)
         button_fit_to_window.setChecked(True)
         button_fit_to_window.setStatusTip("Resize picture to fit to window")
-        button_fit_to_window.triggered[bool].connect(self.onFitToWindow)
+        button_fit_to_window.triggered[bool].connect(self.on_fit_to_window)
 
         button_stay_on_top = QtWidgets.QAction("&Stay on top", self)
         button_stay_on_top.setCheckable(True)
         button_stay_on_top.setChecked(False)
         button_stay_on_top.setStatusTip("Have the windows always stay on top")
-        button_stay_on_top.triggered[bool].connect(self.onStayOnTop)
+        button_stay_on_top.triggered[bool].connect(self.on_stay_on_top)
 
         button_normalize_scale = QtWidgets.QAction("&Normalize scale", self)
         button_normalize_scale.setCheckable(True)
@@ -700,7 +709,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_normalize_scale.setStatusTip(
             "Resize the pictures to match the resolution of the largest picture in the group"
         )
-        button_normalize_scale.triggered[bool].connect(self.onNormalizeScale)
+        button_normalize_scale.triggered[bool].connect(self.on_normalize_scale)
 
         menu = self.menuBar()
 
@@ -709,13 +718,13 @@ class PictureWindow(QtWidgets.QMainWindow):
         picture_menu.addAction(button_stay_on_top)
         picture_menu.addAction(button_normalize_scale)
 
-    def onFitToWindow(self, checked: bool) -> None:
+    def on_fit_to_window(self, checked: bool) -> None:
         self.picture.fit_to_window = checked
 
-    def onStayOnTop(self, checked: bool) -> None:
+    def on_stay_on_top(self, checked: bool) -> None:
         self.request_on_top.emit(checked)
 
-    def onNormalizeScale(self, checked: bool) -> None:
+    def on_normalize_scale(self, checked: bool) -> None:
         print("not implemented yet", checked)
 
     # qt virtual
@@ -740,26 +749,26 @@ class TableWidget(QtWidgets.QWidget):
         self.layout.addWidget(self.view)
 
         self.view.activated.connect(self.row_activated)
-        self.picture_window.picture.picture_checked.connect(self.onPicChecked)
-        self.picture_window.picture.picture_reference.connect(self.onPicReference)
-        self.model.row_checked.connect(self.onRowChecked)
-        self.model.row_reference.connect(self.onRowReference)
+        self.picture_window.picture.picture_checked.connect(self.on_pic_checked)
+        self.picture_window.picture.picture_reference.connect(self.on_pic_reference)
+        self.model.row_checked.connect(self.on_row_checked)
+        self.model.row_reference.connect(self.on_row_reference)
 
-    def onPicChecked(self, group: int, path: str, checked: bool) -> None:
+    def on_pic_checked(self, group: int, path: str, checked: bool) -> None:
         self.model.set_checked_by_file(group, path, checked)
         self.view.viewport().repaint()
 
-    def onPicReference(self, group: int, path: str) -> None:
+    def on_pic_reference(self, group: int, path: str) -> None:
         self.model.set_reference_by_file(group, path)
         self.view.viewport().repaint()
 
-    def onRowChecked(self, group: int, path: str, checked: bool) -> None:
+    def on_row_checked(self, group: int, path: str, checked: bool) -> None:
         self.picture_window.picture.check_picture(group, path, checked)
 
-    def onRowReference(self, group: int, path: str) -> None:
+    def on_row_reference(self, group: int, path: str) -> None:
         self.picture_window.picture.reference_picture(group, path)
 
-    def read_file(self, path: str) -> None:
+    def read_file(self, path: str) -> Tuple[int, int]:
         in_tz = {
             "local": None,
             "utc": timezone.utc,
@@ -791,7 +800,7 @@ class TableWidget(QtWidgets.QWidget):
         else:
             raise ValueError(f"Invalid file extension: {path}")
 
-        self.model.load_df(df)
+        return self.model.load_df(df)
 
     def to_file(self, path: str) -> None:
         if path.endswith(".csv"):
@@ -801,7 +810,7 @@ class TableWidget(QtWidgets.QWidget):
         elif path.endswith(".json"):
             # fixme: to_json drops timezone info from datetimes
             # https://github.com/pandas-dev/pandas/issues/12997
-            self.model.df.to_json(path, "table", force_ascii=False)
+            self.model.df.to_json(path, "table", force_ascii=False, indent=2)
         else:
             raise ValueError(f"Invalid file extension: {path}")
 
@@ -835,15 +844,15 @@ class TableWindow(QtWidgets.QMainWindow):
 
         button_open = QtWidgets.QAction("&Open", self)
         button_open.setStatusTip("Open list of image groups")
-        button_open.triggered.connect(self.onOpen)
+        button_open.triggered.connect(self.on_file_open)
 
         button_save = QtWidgets.QAction("&Save", self)
         button_save.setStatusTip("Save list of image groups with selection")
-        button_save.triggered.connect(self.onSave)
+        button_save.triggered.connect(self.on_file_save)
 
         button_exit = QtWidgets.QAction("E&xit", self)
         button_exit.setStatusTip("Close the application")
-        button_exit.triggered.connect(self.onExit)
+        button_exit.triggered.connect(self.on_app_exit)
 
         self.button_prioritize = QtWidgets.QAction("&Prioritize", self)
         self.button_prioritize.setStatusTip("Sort files within groups")
@@ -854,9 +863,12 @@ class TableWindow(QtWidgets.QMainWindow):
         button_fullscreen.setCheckable(True)
         button_fullscreen.setChecked(False)
         button_fullscreen.setStatusTip("Show window in fullscreen mode")
-        button_fullscreen.triggered[bool].connect(self.onFullscreen)
+        button_fullscreen.triggered[bool].connect(self.on_fullscreen)
 
-        self.setStatusBar(QtWidgets.QStatusBar(self))
+        self.statusbar_label = QtWidgets.QLabel(self)
+        self.statusbar = QtWidgets.QStatusBar(self)
+        self.statusbar.addWidget(self.statusbar_label)
+        self.setStatusBar(self.statusbar)
 
         menu = self.menuBar()
 
@@ -871,15 +883,29 @@ class TableWindow(QtWidgets.QMainWindow):
         view_menu = menu.addMenu("&View")
         view_menu.addAction(button_fullscreen)
 
-        self.picture_window.request_on_top.connect(self.onTop)
+        self.picture_window.request_on_top.connect(self.on_set_top)
+
+    def set_permanent_status(self, text: str) -> None:
+        self.statusbar_label.setText(text)
+
+    def set_temporary_status(self, text: str) -> None:
+        self.statusbar.showMessage(text)
 
     def read_file(self, path: str) -> None:
-        self.table.read_file(path)
-        self.button_prioritize.setEnabled(True)
+        try:
+            with MeasureTime() as stopwatch:
+                num_files, num_groups = self.table.read_file(path)
+                time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+                logging.debug("Loaded %d files in %d groups in %s", num_files, num_groups, time_delta)
+                self.set_permanent_status(f"Loaded {num_files} files in {num_groups} groups in {time_delta}")
+        except ValueError as e:
+            logging.error("Reading <%s> failed: %s", path, e)
+        else:
+            self.button_prioritize.setEnabled(True)
 
     # qt callbacks
 
-    def onTop(self, checked: bool) -> None:
+    def on_set_top(self, checked: bool) -> None:
         parent = self if checked else None
         pos = self.picture_window.pos()
         self.picture_window.setParent(parent)
@@ -893,7 +919,7 @@ class TableWindow(QtWidgets.QMainWindow):
         self.picture_window.move(pos)
         self.picture_window.show()
 
-    def onOpen(self, checked: bool) -> None:
+    def on_file_open(self, checked: bool) -> None:
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.ExistingFile)
         dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptOpen)
@@ -909,7 +935,7 @@ class TableWindow(QtWidgets.QMainWindow):
             path = dialog.selectedFiles()[0]
             self.read_file(path)
 
-    def onSave(self, checked: bool) -> None:
+    def on_file_save(self, checked: bool) -> None:
 
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
@@ -944,10 +970,10 @@ class TableWindow(QtWidgets.QMainWindow):
     def on_prioritize_done(self, df: pd.DataFrame) -> None:
         self.table.model.set_df(df)
 
-    def onExit(self, checked: bool) -> None:
+    def on_app_exit(self, checked: bool) -> None:
         self.close()
 
-    def onFullscreen(self, checked: bool) -> None:
+    def on_fullscreen(self, checked: bool) -> None:
         if checked:
             self.showFullScreen()
         else:
@@ -955,7 +981,7 @@ class TableWindow(QtWidgets.QMainWindow):
 
     # qt virtual
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         if self.table.has_data():
             q = QtWidgets.QMessageBox()
             q.setWindowTitle(APP_NAME)
@@ -989,7 +1015,7 @@ if __name__ == "__main__":
     widget.setWindowTitle(APP_NAME)
     widget.resize(800, 600)
     if args.in_path:
-        widget.read_file(args.csv_path)
+        widget.read_file(os.fspath(args.in_path))
     widget.show()
 
     sys.exit(app.exec_())
