@@ -389,6 +389,7 @@ def main() -> None:
         cached: bool
         path: Path
         img_hash: bytes
+        inodes: Dict[Tuple[int, int], Set[Path]] = {}
 
         for entry in progress(
             pathiter(args.directories, args.recursive), extra_info_callback=lambda total, length: "Finding files"
@@ -396,9 +397,33 @@ def main() -> None:
             if entrysuffix(entry).lower() not in args.extensions:
                 continue
 
-            futures.append(executor.submit(hash_func, Path(entry)))
+            path = Path(entry)
+            stats = path.stat()  # `entry.stat()` does not populate all fields on windows
+
+            assert stats.st_nlink > 0
+
+            if stats.st_nlink == 1:  # no other links
+                futures.append(executor.submit(hash_func, path))
+            else:
+                file_id = (stats.st_dev, stats.st_ino)
+                try:
+                    inodes[file_id].add(path)
+                except KeyError:
+                    # only scan if this inode group was encountered the first time
+                    inodes[file_id] = {path}
+                    futures.append(executor.submit(hash_func, path))
 
         logging.info("Analyzing %d files", len(futures))
+
+        inodes = {k: paths for k, paths in inodes.items() if len(paths) > 1}
+
+        if inodes:
+            n_paths = sum(map(len, inodes.values()))
+            logging.warning(
+                "File collection resulted in %d groups of inodes which are referenced more than once, with a total of %d paths. Only the first encountered path will be considered for duplicate matching.",
+                len(inodes),
+                n_paths,
+            )
 
         num_cached = 0
         num_fresh = 0
@@ -416,6 +441,10 @@ def main() -> None:
                 continue
             except UnidentifiedImageError as e:
                 logging.warning("%s: %s", type(e).__name__, e)
+                num_error += 1
+                continue
+            except MemoryError as e:
+                logging.error("%s: %s", type(e).__name__, e)
                 num_error += 1
                 continue
             except Exception:
