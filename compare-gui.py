@@ -112,7 +112,12 @@ def open_using_default_app(path: str) -> None:
 
 
 class AspectRatioPixmapLabel(QtWidgets.QLabel):
-    def __init__(self, fit_to_widget: bool = True, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(
+        self,
+        fit_to_widget: bool = True,
+        fixed_size: Optional[QtCore.QSize] = None,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
 
         """If `fit_to_widget` is True, the label will be resized to match the parent widgets size.
         If it's False, it will be resized to the images original size.
@@ -126,21 +131,29 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
 
         # set properties
         self.fit_to_widget = fit_to_widget
+        self.fixed_size = fixed_size
 
     def clear(self) -> None:
         super().clear()
         self.pm = None
 
-    def scaledPixmap(self, size: QtCore.QSize) -> QtGui.QPixmap:
+    def _scaled_pixmap(self, size: QtCore.QSize) -> QtGui.QPixmap:
         assert self.pm is not None
         return self.pm.scaled(size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
 
+    def resize_pixmap(self, size: QtCore.QSize):
+        # don't overwrite `super().resize()` here by accident
+        super().setPixmap(self._scaled_pixmap(size))
+
     def scale(self) -> None:
         assert self.pm is not None
-        if self.fit_to_widget:
-            super().setPixmap(self.scaledPixmap(self.size()))
+        if self.fixed_size:
+            self.resize_pixmap(self.fixed_size)
+            self.adjustSize()
+        elif self.fit_to_widget:
+            self.resize_pixmap(self.size())
         else:
-            super().setPixmap(self.scaledPixmap(self.pm.size()))
+            self.resize_pixmap(self.pm.size())
             self.adjustSize()
 
     def setPixmap(self, pm: QtGui.QPixmap) -> None:
@@ -157,6 +170,16 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         if self.pm is not None:
             self.scale()
 
+    @property
+    def fixed_size(self) -> Optional[QtCore.QSize]:
+        return self._fixed_size
+
+    @fixed_size.setter
+    def fixed_size(self, value: Optional[QtCore.QSize]) -> None:
+        self._fixed_size = value
+        if self.pm is not None:
+            self.scale()
+
     # qt virtual
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
@@ -166,7 +189,9 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         # so when setting a new pixmap, a resize event could still be triggered
         # even if `self.fit_to_widget` is False.
 
-        if self.pm is not None and self.fit_to_widget:
+        # print("resizeEvent", self.fit_to_widget, self.fixed_size)
+
+        if self.pm is not None and self.fit_to_widget and self.fixed_size is None:
             self.scale()
         super().resizeEvent(event)
 
@@ -263,6 +288,14 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         self.dataChanged.emit(index, index)
         index = self.createIndex(old_row, col_prio)
         self.dataChanged.emit(index, index)
+
+    def get_group_max_size(self, group: int) -> Optional[Tuple[int, int]]:
+        w = self.df.loc[group]["width"].max()
+        h = self.df.loc[group]["height"].max()
+        if w is pd.NA or h is pd.NA:
+            return None
+        else:
+            return w, h
 
     # required by Qt
 
@@ -608,6 +641,7 @@ class PictureWidget(QtWidgets.QWidget):
         self.pic_group = None
 
         # set properties
+        self._fixed_size = None  # set first
         self.fit_to_window = True
 
     def on_check(self, checked: bool) -> None:
@@ -630,8 +664,25 @@ class PictureWidget(QtWidgets.QWidget):
     @fit_to_window.setter
     def fit_to_window(self, value: bool) -> None:
         self._fit_to_window = value
-        self.scroll.setWidgetResizable(value)
-        self.label.fit_to_widget = value
+        if self.fixed_size is None:
+            self.scroll.setWidgetResizable(value)
+            self.label.fit_to_widget = value
+        else:
+            self.label._fit_to_widget = value
+
+    @property
+    def fixed_size(self) -> Optional[Tuple[int, int]]:
+        return self._fixed_size
+
+    @fixed_size.setter
+    def fixed_size(self, value: Optional[Tuple[int, int]]) -> None:
+        self._fixed_size = value
+        if value is None:
+            self.scroll.setWidgetResizable(self.label.fit_to_widget)
+            self.label.fixed_size = None
+        else:
+            self.scroll.setWidgetResizable(False)
+            self.label.fixed_size = QtCore.QSize(*value)
 
     def check_picture(self, group: int, path: str, checked: bool) -> bool:
         if group == self.pic_group and path == self.pic_path:
@@ -653,6 +704,11 @@ class PictureWidget(QtWidgets.QWidget):
     def load_picture(self, group: int, path: str, checked: bool, reference: bool) -> bool:
         try:
             self.pixmap = read_qt_pixmap(path)
+
+            # fixme: This can disable scale normalization if there's no width/high information.
+            # There are not GUI indicators for this however.
+            self.fixed_size = self.parent().model.get_group_max_size(group)
+
             self.label.setPixmap(self.pixmap)
             self.button1.setChecked(checked)
             self.button1.setEnabled(not reference)
@@ -687,9 +743,10 @@ class PictureWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent, flags)
 
-        self.picture = PictureWidget()
+        self.picture = PictureWidget(parent=self)
         self.setCentralWidget(self.picture)
         self.setStatusBar(QtWidgets.QStatusBar(self))
+        self.model: Optional[GroupedPictureModel] = None
 
         button_fit_to_window = QtWidgets.QAction("&Fit to window", self)
         button_fit_to_window.setCheckable(True)
@@ -725,7 +782,12 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.request_on_top.emit(checked)
 
     def on_normalize_scale(self, checked: bool) -> None:
-        print("not implemented yet", checked)
+        assert self.model
+        assert self.picture.pic_group
+        if checked:
+            self.picture.fixed_size = self.model.get_group_max_size(self.picture.pic_group)
+        else:
+            self.picture.fixed_size = None
 
     # qt virtual
 
@@ -841,6 +903,7 @@ class TableWindow(QtWidgets.QMainWindow):
         self.picture_window.resize(800, 600)
         self.table = TableWidget(self.picture_window)
         self.setCentralWidget(self.table)
+        self.picture_window.model = self.table.model
 
         button_open = QtWidgets.QAction("&Open", self)
         button_open.setStatusTip("Open list of image groups")

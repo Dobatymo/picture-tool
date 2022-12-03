@@ -135,3 +135,6 @@ optional arguments:
 - Apple Photos
 - XnView MP (Windows 7+, Mac 10.13+, Linux)
 - Adobe Lightroom Classic
+
+## Resources
+- https://rmlint.readthedocs.io/en/latest/cautions.html
