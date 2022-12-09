@@ -33,6 +33,7 @@ pyside2 = "^5.15.2.1"
 requests = {version = "^2.28.1", optional = true}
 pyarrow = {version = "^10.0.1", optional = true}
 python-dateutil = "^2.8.2"
+networkx = "^2.8.8"
 
 [tool.poetry.dev-dependencies]
 pre-commit = "^2.19.0"

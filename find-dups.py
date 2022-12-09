@@ -7,8 +7,6 @@ from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from collections import defaultdict
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from datetime import timedelta
-from itertools import groupby
-from operator import itemgetter
 from pathlib import Path
 from typing import (
     Any,
@@ -31,49 +29,35 @@ import imagehash
 import msgpack
 import numpy as np
 import piexif
-from appdirs import user_data_dir
 from genutility.args import is_dir, suffix_lower
 from genutility.datetime import datetime_from_utc_timestamp_ns
 from genutility.file import StdoutFile
-from genutility.filesdb import FileDbSimple, NoResult
+from genutility.filesdb import NoResult
 from genutility.filesystem import entrysuffix, scandir_rec
 from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
 from genutility.iter import progress
 from genutility.json import read_json
 from genutility.time import MeasureTime
-from genutility.typing import CsvWriter
+from genutility.typing import CsvWriter, SizedIterable
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from PIL.IptcImagePlugin import getiptcinfo
 
 from npmp import ChunkedParallel, SharedNdarray
-from utils import get_exif_dates, hamming_duplicates_chunk
+from utils import (
+    APP_NAME,
+    APP_VERSION,
+    DEFAULT_APPDATA_DIR,
+    DEFAULT_HASHDB,
+    HashDB,
+    get_exif_dates,
+    hamming_duplicates_chunk,
+    make_groups,
+)
 
 HEIF_EXTENSIONS = (".heic", ".heif")
 JPEG_EXTENSIONS = (".jpg", ".jpeg")
-APP_NAME = "picture-tool"
-APP_AUTHOR = "Dobatymo"
-APP_VERSION = "0.1"
 Shape = Tuple[int, ...]
-
-
-class HashDB(FileDbSimple):
-    @classmethod
-    def derived(cls):
-        return [
-            ("file_sha256", "BLOB", "?"),
-            ("image_sha256", "BLOB", "?"),
-            ("phash", "BLOB", "?"),
-            ("width", "INTEGER", "?"),
-            ("height", "INTEGER", "?"),
-            ("exif", "BLOB", "?"),
-            ("icc_profile", "BLOB", "?"),
-            ("iptc", "BLOB", "?"),
-            ("photoshop", "BLOB", "?"),
-        ]
-
-    def __init__(self, path: str) -> None:
-        FileDbSimple.__init__(self, path, "picture-hashes")
 
 
 def hash_file_hash(path: str) -> bytes:
@@ -123,6 +107,8 @@ class wrap:
         except UnidentifiedImageError:
             raise  # inherits from OSError, so must be re-raised explicitly
         except OSError as e:
+            raise ImageError(path, e)
+        except ValueError as e:
             raise ImageError(path, e)
 
         with Image.open(path) as img:
@@ -203,7 +189,7 @@ def initializer_worker(extensions: Collection[str]) -> None:
         register_heif_opener()
 
 
-def hamming_duplicates(sharr: SharedNdarray, chunkshape: Shape, hamming_threshold: int) -> Collection[np.ndarray]:
+def hamming_duplicates(sharr: SharedNdarray, chunkshape: Shape, hamming_threshold: int) -> SizedIterable[np.ndarray]:
     if len(sharr.shape) != 2 or sharr.dtype != np.uint8:
         raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
 
@@ -224,7 +210,7 @@ def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
 
 
 def maybe_decode(
-    s: Optional[bytes], encoding: str = "ascii", context: Optional[Dict[str, str]] = None
+    s: Optional[bytes], encoding: str = "ascii", context: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     if s is None:
         return None
@@ -250,13 +236,7 @@ def notify(topic: str, message: str):
     )
 
 
-def group_sorted_pairs(pairs: Iterable[Tuple[Any, Any]]) -> List[List[Any]]:
-    return [[first] + [second for _, second in group] for first, group in groupby(pairs, key=itemgetter(0))]
-
-
 def main() -> None:
-
-    DEFAULT_APPDATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR))
 
     try:
         config_path = DEFAULT_APPDATA_DIR / "config.json"
@@ -266,7 +246,6 @@ def main() -> None:
         default_config = {}
 
     DEFAULT_EXTENSIONS = JPEG_EXTENSIONS + HEIF_EXTENSIONS + (".png", ".webp")
-    DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
     DEFAULT_NORMALIZATION_OPS = ("orientation", "resolution", "colors")
     DEFAULT_NORMALIZED_RESOLUTION = (256, 256)
     DEFAULT_PARALLEL_READ = multiprocessing.cpu_count()
@@ -488,8 +467,8 @@ def main() -> None:
             else:
                 _path = Path(path)
 
-            filesize, mod_date, width, height, exif = db.get(
-                _path, only=("filesize", "mod_date", "width", "height", "exif")
+            file_id, device_id, filesize, mod_date, width, height, exif = db.get(
+                _path, only=("file_id", "device_id", "filesize", "mod_date", "width", "height", "exif")
             )
             dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
 
@@ -517,6 +496,8 @@ def main() -> None:
                 [
                     i,
                     path,
+                    file_id,
+                    device_id,
                     filesize,
                     dt.isoformat(),
                     width,
@@ -554,9 +535,7 @@ def main() -> None:
                     )
                 )
             )
-            idx = np.argsort(dups[:, 0])
-            dupgroups = group_sorted_pairs(dups[idx])
-            dupgroups = [[paths[idx] for idx in indices] for indices in dupgroups]
+            dupgroups = [[paths[idx] for idx in indices] for indices in make_groups(dups)]
 
         time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
         logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
@@ -569,6 +548,8 @@ def main() -> None:
             [
                 "group",
                 "path",
+                "file_id",
+                "device_id",
                 "filesize",
                 "mod_date",
                 "width",

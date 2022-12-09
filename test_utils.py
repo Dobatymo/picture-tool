@@ -5,12 +5,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from genutility.test import parametrize
+from genutility.test import MyTestCase, parametrize
 
 from utils import (
     Max,
     hamming_duplicates_chunk,
     make_datetime,
+    make_groups,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
     pd_sort_within_group_slow,
@@ -19,7 +20,7 @@ from utils import (
 )
 
 
-class TestUtils(unittest.TestCase):
+class TestUtils(MyTestCase):
     def test_pd_sort_groups_by_first_row(self):
         df = pd.DataFrame({"group": [], "value": []}).set_index("group")
         truth = df
@@ -271,6 +272,12 @@ class TestUtils(unittest.TestCase):
         )
         result = to_datetime(ds, in_tz, timezone.utc)
         pd.testing.assert_series_equal(truth, result)
+
+    def test_make_groups(self):
+        truth = [{1, 2, 3}, {4, 5}]
+        arr = np.array([[1, 2], [1, 3], [2, 3], [4, 5]])
+        result = make_groups(arr)
+        self.assertIterEqual(truth, result)
 
 
 if __name__ == "__main__":
