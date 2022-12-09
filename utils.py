@@ -1,15 +1,29 @@
 from datetime import datetime, timedelta, tzinfo
 from functools import total_ordering
+from itertools import groupby
+from operator import itemgetter
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple, TypedDict
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar
 
+import networkx as nx
 import numpy as np
 import pandas as pd
 import piexif
+from appdirs import user_data_dir
 from dateutil import tz
 from genutility.datetime import is_aware
+from genutility.filesdb import FileDbWithId
 from genutility.numpy import hamming_dist_packed
 from pandas._typing import ValueKeyFunc
+
+T = TypeVar("T")
+
+APP_NAME = "picture-tool"
+APP_AUTHOR = "Dobatymo"
+APP_VERSION = "0.1"
+
+DEFAULT_APPDATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR))
+DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
 
 
 def to_datetime(col: pd.Series, in_tz: Optional[tzinfo] = None, out_tz: Optional[tzinfo] = None) -> datetime:
@@ -35,6 +49,8 @@ def with_stem(path: Path, stem: str) -> Path:
 def hamming_duplicates_chunk(
     a_arr: np.ndarray, b_arr: np.ndarray, coords: Tuple[int, ...], axis: int, hamming_threshold: int
 ) -> np.ndarray:
+    """Returns a list of coordinate pairs which are duplicates."""
+
     dists = hamming_dist_packed(a_arr, b_arr, axis)
     return np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
 
@@ -206,3 +222,37 @@ def get_exif_dates(exif: dict) -> Dict[str, datetime]:
             pass
 
     return out
+
+
+class HashDB(FileDbWithId):
+    @classmethod
+    def derived(cls):
+        return [
+            ("file_sha256", "BLOB", "?"),
+            ("image_sha256", "BLOB", "?"),
+            ("phash", "BLOB", "?"),
+            ("width", "INTEGER", "?"),
+            ("height", "INTEGER", "?"),
+            ("exif", "BLOB", "?"),
+            ("icc_profile", "BLOB", "?"),
+            ("iptc", "BLOB", "?"),
+            ("photoshop", "BLOB", "?"),
+        ]
+
+    def __init__(self, path: str) -> None:
+        FileDbWithId.__init__(self, path, "picture-hashes")
+
+
+def group_sorted_pairs(pairs: Iterable[Tuple[T, T]]) -> Iterator[List[T]]:
+    return ([first] + [second for _, second in group] for first, group in groupby(pairs, key=itemgetter(0)))
+
+
+def make_groups_greedy(dups: np.ndarray) -> Iterator[List[int]]:
+    idx = np.argsort(dups[:, 0])
+    return group_sorted_pairs(dups[idx])
+
+
+def make_groups(dups: np.ndarray) -> Iterator[Set[int]]:
+    G = nx.Graph()
+    G.add_edges_from(dups)
+    return nx.connected_components(G)

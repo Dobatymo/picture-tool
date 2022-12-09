@@ -21,8 +21,7 @@ class RotateFailed(Exception):
     pass
 
 
-def dt_gps_from_exif(exif):
-    # type: (dict, ) -> datetime
+def dt_gps_from_exif(exif: dict) -> datetime:
 
     try:
         datestamp = exif["GPS"][piexif.GPSIFD.GPSDateStamp].decode("ascii")
@@ -41,8 +40,9 @@ def dt_gps_from_exif(exif):
     return datetime.combine(_date, _time, timezone.utc)
 
 
-def get_original_date(exif, aslocal=True, sources=("exif-original", "exif-digitized", "gps")):
-    # type: (dict, bool, Iterable[str]) -> datetime
+def get_original_date(
+    exif: dict, aslocal: bool = True, sources: Iterable[str] = ("exif-original", "exif-digitized", "gps")
+) -> datetime:
 
     """Returns the original picture date from exif date or raises `NoDateFound`.
 
@@ -81,8 +81,14 @@ def get_original_date(exif, aslocal=True, sources=("exif-original", "exif-digiti
         return dt
 
 
-def add_date(image, align="BR", fontsize=0.03, padding=0.01, fillcolor="white", outlinecolor="black"):
-    # type: (Image, str, float, float, str, str) -> Tuple[Image, Dict[str, Any]]
+def add_date(
+    image: Image,
+    align: str = "BR",
+    fontsize: float = 0.03,
+    padding: float = 0.01,
+    fillcolor: str = "white",
+    outlinecolor: str = "black",
+) -> Tuple[Image, Dict[str, Any]]:
 
     try:
         exif = piexif.load(image.info["exif"])
@@ -104,8 +110,7 @@ def add_date(image, align="BR", fontsize=0.03, padding=0.01, fillcolor="white", 
     return image, kwargs
 
 
-def mod_image(inpath, outpath, args, quality=90, move=None):
-    # type: (Path, Path, Any, int, Optional[str]) -> bool
+def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: Optional[str] = None) -> bool:
 
     if inpath.resolve() == outpath.resolve():
         raise ValueError("inpath cannot be equal to output")

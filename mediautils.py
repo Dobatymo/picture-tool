@@ -47,7 +47,7 @@ if __name__ == "__main__":
     mif = MediaInfoFields()
 
     extensions = {"." + ext for ext in fileextensions.video + fileextensions.audio + fileextensions.images}
-    unhandled_keys = defaultdict(set)  # type: DefaultDict[str, Set[Tuple[str, str]]]
+    unhandled_keys: DefaultDict[str, Set[Tuple[str, str]]] = defaultdict(set)
 
     for path in args.path:
         for path in progress(scandir_ext(path, extensions, errorfunc=scandir_error_log)):
