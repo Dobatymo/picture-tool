@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from datetime import timedelta, timezone
+from functools import lru_cache
 from inspect import signature
 from itertools import chain
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -27,6 +28,7 @@ from utils import SortValuesKwArgs, pd_sort_groups_by_first_row, pd_sort_within_
 register_heif_opener()
 
 APP_NAME = "compare-gui"
+PIC_CACHE_SIZE = 4
 
 
 def cumsum(arr: np.ndarray) -> np.ndarray:
@@ -48,6 +50,7 @@ def set_reference_unchecked(df: pd.DataFrame) -> None:
     df.iloc[idx, df.columns.get_loc("checked")] = False
 
 
+@lru_cache(maxsize=PIC_CACHE_SIZE)
 def read_qt_pixmap(path: str) -> QtGui.QPixmap:
 
     """Uses `pillow` to read a QPixmap from `path`.
@@ -707,7 +710,8 @@ class PictureWidget(QtWidgets.QWidget):
 
             # fixme: This can disable scale normalization if there's no width/high information.
             # There are not GUI indicators for this however.
-            self.fixed_size = self.parent().model.get_group_max_size(group)
+            if self.fixed_size is not None:  # only update if it was set previously
+                self.fixed_size = self.parent().model.get_group_max_size(group)
 
             self.label.setPixmap(self.pixmap)
             self.button1.setChecked(checked)
