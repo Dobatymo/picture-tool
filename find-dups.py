@@ -115,23 +115,29 @@ class wrap:
             width, height = img.size
             exif = img.info.get("exif", None)
             icc_profile = img.info.get("icc_profile", None)
-            try:
-                iptc = getiptcinfo(img)
-            except SyntaxError as e:
-                logging.error("%s <%s>: %s", type(e).__name__, path, e)  # fixme: is this shown?
-                iptc = None
-            photoshop = img.info.get("photoshop", None)
 
-        iptc_ = msgpack.packb(iptc, use_bin_type=True)
-        photoshop_ = msgpack.packb(photoshop, use_bin_type=True)
+            try:
+                iptc_ = getiptcinfo(img)
+            except SyntaxError as e:
+                logging.warning("%s <%s>: %s", type(e).__name__, path, e)  # fixme: is this shown?
+                iptc = None
+            else:
+                iptc = msgpack.packb(iptc_, use_bin_type=True)
+
+            try:
+                photoshop_ = img.info["photoshop"]
+            except KeyError:
+                photoshop = None
+            else:
+                photoshop = msgpack.packb(photoshop_, use_bin_type=True)
 
         assert isinstance(img_hash, bytes)
         assert isinstance(width, int)
         assert isinstance(height, int)
         assert isinstance(exif, (bytes, type(None)))
         assert isinstance(icc_profile, (bytes, type(None)))
-        assert isinstance(iptc_, (bytes, type(None)))
-        assert isinstance(photoshop_, (bytes, type(None)))
+        assert isinstance(iptc, (bytes, type(None)))
+        assert isinstance(photoshop, (bytes, type(None)))
 
         return {
             self.colname: img_hash,
@@ -139,8 +145,8 @@ class wrap:
             "height": height,
             "exif": exif,
             "icc_profile": icc_profile,
-            "iptc": iptc_,
-            "photoshop": photoshop_,
+            "iptc": iptc,
+            "photoshop": photoshop,
         }
 
 
@@ -236,6 +242,254 @@ def notify(topic: str, message: str):
     )
 
 
+def write_dup(db: Optional[HashDB], fw: CsvWriter, i: int, path: Union[str, Path]) -> None:
+    if db is not None:
+        if isinstance(path, Path):
+            _path = path
+        else:
+            _path = Path(path)
+
+        file_id, device_id, filesize, mod_date, width, height, exif = db.get(
+            _path, only=("file_id", "device_id", "filesize", "mod_date", "width", "height", "exif")
+        )
+        dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
+
+        if exif is None:
+            exif_date_modified = None
+            exif_date_taken = None
+            exif_date_created = None
+            exif_maker = None
+            exif_model = None
+        else:
+            d = piexif.load(exif)
+            try:
+                dates = get_exif_dates(d)
+            except ValueError as e:
+                logging.warning("Invalid date format <%s>: %s", path, e)
+                dates = {}
+            exif_date_modified = dates.get("modified")
+            exif_date_taken = dates.get("original")
+            exif_date_created = dates.get("digitized")
+
+            exif_maker = maybe_decode(d["0th"].get(271, None), context={"path": path, "0th": 271})
+            exif_model = maybe_decode(d["0th"].get(272, None), context={"path": path, "0th": 272})
+
+        fw.writerow(
+            [
+                i,
+                path,
+                file_id,
+                device_id,
+                filesize,
+                dt.isoformat(),
+                width,
+                height,
+                exif_date_modified.isoformat() if exif_date_modified else None,
+                exif_date_taken.isoformat() if exif_date_taken else None,
+                exif_date_created.isoformat() if exif_date_created else None,
+                exif_maker,
+                exif_model,
+            ]
+        )
+    else:
+        fw.writerow([i, path])
+
+
+def pathiter(directories: Iterable[Path], recursive: bool) -> Iterator[os.DirEntry]:
+    for directory in directories:
+        yield from scandir_rec(directory, files=True, dirs=False, rec=recursive, errorfunc=scandir_error_log_warning)
+
+
+def get_hash_func(mode: str, db: Optional[HashDB], overwrite_cache: bool, normalize, resolution_normalized) -> wrap:
+    hash_funcs = {
+        "file-hash": hash_file_hash,
+        "image-hash": hash_image_hash(normalize, resolution_normalized),
+        "phash": hash_phash,
+    }
+
+    hash_func = hash_funcs[mode]
+    colname = hash_cols[mode]
+    if db is not None:
+        hash_func = wrap_with_db(hash_func, colname, db, overwrite_cache)
+    else:
+        hash_func = wrap_without_db(hash_func, colname)
+
+    return hash_func
+
+
+HashResultT = Union[Dict[bytes, Set[str]], Tuple[List[bytes], List[str]]]
+
+
+def get_hashes(
+    directories: Iterable[Path],
+    recursive: bool,
+    extensions,
+    hash_func: wrap,
+    metric: str,
+    db: Optional[HashDB] = None,
+    parallel_read: Optional[int] = None,
+) -> HashResultT:
+
+    if metric == "equivalence":
+        hash2paths: DefaultDict[bytes, Set[str]] = defaultdict(set)
+    elif metric == "hamming":
+        hashes: List[bytes] = []
+        paths: List[str] = []
+    else:
+        raise ValueError(f"Unsupported metric: {metric}")
+
+    with ProcessPoolExecutor(
+        parallel_read, initializer=initializer_worker, initargs=(extensions,)
+    ) as executor, MeasureTime() as stopwatch:
+        futures: List[Future] = []
+        cached: bool
+        path: Path
+        img_hash: bytes
+        inodes: Dict[Tuple[int, int], Set[Path]] = {}
+
+        for entry in progress(
+            pathiter(directories, recursive), extra_info_callback=lambda total, length: "Finding files"
+        ):
+            if entrysuffix(entry).lower() not in extensions:
+                continue
+
+            path = Path(entry)
+            stats = path.stat()  # `entry.stat()` does not populate all fields on windows
+
+            assert stats.st_nlink > 0
+
+            if stats.st_nlink == 1:  # no other links
+                futures.append(executor.submit(hash_func, path))
+            else:
+                file_id = (stats.st_dev, stats.st_ino)
+                try:
+                    inodes[file_id].add(path)
+                except KeyError:
+                    # only scan if this inode group was encountered the first time
+                    inodes[file_id] = {path}
+                    futures.append(executor.submit(hash_func, path))
+
+        logging.info("Analyzing %d files", len(futures))
+
+        inodes = {k: paths for k, paths in inodes.items() if len(paths) > 1}
+
+        if inodes:
+            n_paths = sum(map(len, inodes.values()))
+            logging.warning(
+                "File collection resulted in %d groups of inodes which are referenced more than once, with a total of %d paths. Only the first encountered path will be considered for duplicate matching.",
+                len(inodes),
+                n_paths,
+            )
+        del inodes
+
+        num_cached = 0
+        num_fresh = 0
+        num_error = 0
+        for future in progress(
+            as_completed(futures), length=len(futures), extra_info_callback=lambda total, length: "Computing hashes"
+        ):
+            try:
+                cached, path, meta = future.result()
+            except ImageError as e:
+                _path = e.args[0]
+                _e = e.args[1]
+                logging.warning("%s <%s>: %s", type(_e).__name__, _path, _e)
+                num_error += 1
+                continue
+            except (UnidentifiedImageError, FileNotFoundError) as e:
+                logging.warning("%s: %s", type(e).__name__, e)
+                num_error += 1
+                continue
+            except MemoryError as e:
+                logging.error("%s: %s", type(e).__name__, e)
+                num_error += 1
+                continue
+            except Exception:
+                logging.exception("Failed to hash image file")
+                num_error += 1
+                continue
+
+            img_hash = meta[hash_func.colname]
+            rawpath = os.fspath(path)
+
+            if db is not None and not cached:
+                db.add(path, derived=meta, commit=False, replace=False)
+
+            if metric == "equivalence":
+                hash2paths[img_hash].add(rawpath)
+            elif metric == "hamming":
+                paths.append(rawpath)
+                hashes.append(img_hash)
+
+            if cached:
+                num_cached += 1
+            else:
+                num_fresh += 1
+
+        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+        logging.info(
+            "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d in %s",
+            num_cached,
+            num_fresh,
+            num_error,
+            time_delta,
+        )
+
+    if db is not None:
+        db.commit()
+
+    if metric == "equivalence":
+        return dict(hash2paths)
+    elif metric == "hamming":
+        return paths, hashes
+
+
+def get_dupe_groups(
+    metric: str, hash_result: HashResultT, chunksize, ntfy_topic: Optional[str] = None
+) -> List[List[str]]:
+    dupgroups: List[List[str]]
+
+    with MeasureTime() as stopwatch:
+        if metric == "equivalence":
+            hashes = hash_result
+            dupgroups = [list(paths) for digest, paths in hashes.items() if len(paths) > 1]
+
+        elif metric == "hamming":
+            paths, hashes = hash_result
+            del hash_result
+            assert len(paths) == len(hashes)
+            if hashes:
+                hamming_threshold = 1
+
+                sharr = SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
+                buffer_fill(hashes, sharr.getbuffer())
+                del hashes
+
+                chunkshape = (chunksize, chunksize)
+                dups = np.concatenate(
+                    list(
+                        progress(
+                            hamming_duplicates(sharr, chunkshape, hamming_threshold),
+                            extra_info_callback=lambda total, length: "Matching hashes",
+                        )
+                    )
+                )
+                del sharr
+                dupgroups = [[paths[idx] for idx in indices] for indices in make_groups(dups)]
+                del dups
+            else:
+                dupgroups = []
+        else:
+            raise ValueError(f"Unsupported metric: {metric}")
+
+        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+        logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
+        if ntfy_topic:
+            notify(ntfy_topic, f"Found {len(dupgroups)} duplicate groups in {time_delta}")
+
+    return dupgroups
+
+
 def main() -> None:
 
     try:
@@ -328,12 +582,6 @@ def main() -> None:
     else:
         logging.basicConfig(level=logging.INFO)
 
-    def pathiter(directories: Iterable[Path], recursive: bool) -> Iterator[os.DirEntry]:
-        for directory in directories:
-            yield from scandir_rec(
-                directory, files=True, dirs=False, rec=recursive, errorfunc=scandir_error_log_warning
-            )
-
     if args.hashdb:
         args.hashdb.parent.mkdir(parents=True, exist_ok=True)
         db = HashDB(args.hashdb)
@@ -341,206 +589,12 @@ def main() -> None:
     else:
         db = None
 
-    hash_funcs = {
-        "file-hash": hash_file_hash,
-        "image-hash": hash_image_hash(args.normalize, args.resolution_normalized),
-        "phash": hash_phash,
-    }
+    hash_func = get_hash_func(args.mode, db, args.overwrite_cache, args.normalize, args.resolution_normalized)
     metric = hash_metrics[args.mode]
-
-    if metric == "equivalence":
-        hashes: DefaultDict[bytes, Set[str]] = defaultdict(set)
-    elif metric == "hamming":
-        hashes: List[bytes] = []
-        paths: List[str] = []
-
-    hash_func = hash_funcs[args.mode]
-    colname = hash_cols[args.mode]
-    if db is not None:
-        hash_func = wrap_with_db(hash_func, colname, db, args.overwrite_cache)
-    else:
-        hash_func = wrap_without_db(hash_func, colname)
-
-    with ProcessPoolExecutor(
-        args.parallel_read, initializer=initializer_worker, initargs=(args.extensions,)
-    ) as executor, MeasureTime() as stopwatch:
-        futures: List[Future] = []
-        cached: bool
-        path: Path
-        img_hash: bytes
-        inodes: Dict[Tuple[int, int], Set[Path]] = {}
-
-        for entry in progress(
-            pathiter(args.directories, args.recursive), extra_info_callback=lambda total, length: "Finding files"
-        ):
-            if entrysuffix(entry).lower() not in args.extensions:
-                continue
-
-            path = Path(entry)
-            stats = path.stat()  # `entry.stat()` does not populate all fields on windows
-
-            assert stats.st_nlink > 0
-
-            if stats.st_nlink == 1:  # no other links
-                futures.append(executor.submit(hash_func, path))
-            else:
-                file_id = (stats.st_dev, stats.st_ino)
-                try:
-                    inodes[file_id].add(path)
-                except KeyError:
-                    # only scan if this inode group was encountered the first time
-                    inodes[file_id] = {path}
-                    futures.append(executor.submit(hash_func, path))
-
-        logging.info("Analyzing %d files", len(futures))
-
-        inodes = {k: paths for k, paths in inodes.items() if len(paths) > 1}
-
-        if inodes:
-            n_paths = sum(map(len, inodes.values()))
-            logging.warning(
-                "File collection resulted in %d groups of inodes which are referenced more than once, with a total of %d paths. Only the first encountered path will be considered for duplicate matching.",
-                len(inodes),
-                n_paths,
-            )
-
-        num_cached = 0
-        num_fresh = 0
-        num_error = 0
-        for future in progress(
-            as_completed(futures), length=len(futures), extra_info_callback=lambda total, length: "Computing hashes"
-        ):
-            try:
-                cached, path, meta = future.result()
-            except ImageError as e:
-                _path = e.args[0]
-                _e = e.args[1]
-                logging.warning("%s <%s>: %s", type(_e).__name__, _path, _e)
-                num_error += 1
-                continue
-            except UnidentifiedImageError as e:
-                logging.warning("%s: %s", type(e).__name__, e)
-                num_error += 1
-                continue
-            except MemoryError as e:
-                logging.error("%s: %s", type(e).__name__, e)
-                num_error += 1
-                continue
-            except Exception:
-                logging.exception("Failed to hash image file")
-                num_error += 1
-                continue
-
-            img_hash = meta[colname]
-            rawpath = os.fspath(path)
-
-            if db is not None and not cached:
-                db.add(path, derived=meta, commit=False, replace=False)
-
-            if metric == "equivalence":
-                hashes[img_hash].add(rawpath)
-            elif metric == "hamming":
-                paths.append(rawpath)
-                hashes.append(img_hash)
-
-            if cached:
-                num_cached += 1
-            else:
-                num_fresh += 1
-
-        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-        logging.info(
-            "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d in %s",
-            num_cached,
-            num_fresh,
-            num_error,
-            time_delta,
-        )
-
-    if db is not None:
-        db.commit()
-
-    def write_dup(fw: CsvWriter, i: int, path: Union[str, Path]) -> None:
-        if db is not None:
-            if isinstance(path, Path):
-                _path = path
-            else:
-                _path = Path(path)
-
-            file_id, device_id, filesize, mod_date, width, height, exif = db.get(
-                _path, only=("file_id", "device_id", "filesize", "mod_date", "width", "height", "exif")
-            )
-            dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
-
-            if exif is None:
-                exif_date_modified = None
-                exif_date_taken = None
-                exif_date_created = None
-                exif_maker = None
-                exif_model = None
-            else:
-                d = piexif.load(exif)
-                try:
-                    dates = get_exif_dates(d)
-                except ValueError as e:
-                    logging.warning("Invalid date format <%s>: %s", path, e)
-                    dates = {}
-                exif_date_modified = dates.get("modified")
-                exif_date_taken = dates.get("original")
-                exif_date_created = dates.get("digitized")
-
-                exif_maker = maybe_decode(d["0th"].get(271, None), context={"path": path, "0th": 271})
-                exif_model = maybe_decode(d["0th"].get(272, None), context={"path": path, "0th": 272})
-
-            fw.writerow(
-                [
-                    i,
-                    path,
-                    file_id,
-                    device_id,
-                    filesize,
-                    dt.isoformat(),
-                    width,
-                    height,
-                    exif_date_modified.isoformat() if exif_date_modified else None,
-                    exif_date_taken.isoformat() if exif_date_taken else None,
-                    exif_date_created.isoformat() if exif_date_created else None,
-                    exif_maker,
-                    exif_model,
-                ]
-            )
-        else:
-            fw.writerow([i, path])
-
-    if not hashes:
-        return
-
-    dupgroups: List[List[str]]
-
-    with MeasureTime() as stopwatch:
-        if metric == "equivalence":
-            dupgroups = [list(paths) for digest, paths in hashes.items() if len(paths) > 1]
-
-        elif metric == "hamming":
-            hamming_threshold = 1
-
-            sharr = SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
-            buffer_fill(hashes, sharr.getbuffer())
-            chunkshape = (args.chunksize, args.chunksize)
-            dups = np.concatenate(
-                list(
-                    progress(
-                        hamming_duplicates(sharr, chunkshape, hamming_threshold),
-                        extra_info_callback=lambda total, length: "Matching hashes",
-                    )
-                )
-            )
-            dupgroups = [[paths[idx] for idx in indices] for indices in make_groups(dups)]
-
-        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-        logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
-        if args.ntfy_topic:
-            notify(args.ntfy_topic, f"Found {len(dupgroups)} duplicate groups in {time_delta}")
+    hash_result = get_hashes(
+        args.directories, args.recursive, args.extensions, hash_func, metric, db, args.parallel_read
+    )
+    dupgroups = get_dupe_groups(metric, hash_result, args.chunksize, args.ntfy_topic)
 
     with StdoutFile(args.out, "wt", newline="") as fw:
         writer = csv.writer(fw)
@@ -564,7 +618,7 @@ def main() -> None:
         for i, paths in enumerate(dupgroups, 1):
             for path in paths:
                 try:
-                    write_dup(writer, i, path)
+                    write_dup(db, writer, i, path)
                 except Exception:
                     logging.exception("Failed to obtain meta info for <%s>")
 

@@ -194,6 +194,7 @@ class TestUtils(MyTestCase):
 
     @parametrize(
         (b"2000:01:01 00:00:00", None, None, datetime.fromisoformat("2000-01-01T00:00:00")),
+        (b"2000-01-01 00:00:00", None, None, datetime.fromisoformat("2000-01-01T00:00:00")),
         (b"2000:01:01 00:00:00\0", None, None, datetime.fromisoformat("2000-01-01T00:00:00")),
         (b"2000:01:01 00:00:00", b"", None, datetime.fromisoformat("2000-01-01T00:00:00")),
         (b"2000:01:01 00:00:00", b"123", None, datetime.fromisoformat("2000-01-01T00:00:00.123")),
@@ -209,6 +210,9 @@ class TestUtils(MyTestCase):
     @parametrize(
         (b"2000:01:01 00:00:00\xff", None, None, UnicodeDecodeError),
         (b"2000:02:30 00:00:00", None, None, ValueError),
+        (b"0:0:0 0:0:0", None, None, ValueError),
+        (b"", None, None, ValueError),
+        (b"asd", None, None, ValueError),
     )
     def test_make_datetime_fail(self, date, subsec, offset, exception):
         with self.assertRaises(exception):

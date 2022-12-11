@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, tzinfo
 from functools import total_ordering
 from itertools import groupby
@@ -162,13 +163,27 @@ def pd_sort_within_group(
 
 
 def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> datetime:
+    """Converts `date` with optional `subsec` and `offset` to a python datetime object.
+    Raises ValueError if the input is invalid.
+    """
+
     date_str = date.rstrip(b"\0").decode("ascii")
 
     if offset:
         offset_str = offset.rstrip(b"\0").decode("ascii")
         dt = datetime.strptime(f"{date_str} {offset_str}", "%Y:%m:%d %H:%M:%S %z")
     else:
-        dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+        # `dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")`
+        # would solve the problem according to the exif spec.
+        # However we are a little bit more lenient in our parsing
+        # since some apps don't follow the spec exactly.
+
+        m = re.match(r"(\d+)[:-](\d+)[:-](\d+) (\d+):(\d+):(\d+)", date_str)
+        if m:
+            timetuple = tuple(map(int, m.groups()))
+            dt = datetime(*timetuple)  # type: ignore[arg-type]
+        else:
+            raise ValueError(f"time data '{date_str}' does not match '%Y:%m:%d %H:%M:%S' or '%Y-%m-%d %H:%M:%S'")
 
     if subsec:
         subsec_str = subsec.rstrip(b"\0").decode("ascii")
