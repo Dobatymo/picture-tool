@@ -204,6 +204,10 @@ def slice_to_list(value: slice) -> list:
 
 
 def iloc_by_index_and_bool(df, index: int, bool_idx: pd.Series) -> int:
+
+    if bool_idx.dtype != "bool":
+        raise TypeError(f"bool_idx must be a 'bool' series, not '{bool_idx.dtype}'")
+
     ilocs = np.array(slice_to_list(df.index.get_loc(index)))[bool_idx]
     assert len(ilocs) == 1
     return ilocs[0].item()
@@ -260,9 +264,12 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         self.set_reference_by_file(group, path)
         self.row_reference.emit(group, path)
 
+    def _get_iloc_by(self, group: int, key: str, value: Any) -> int:
+        idx = (self.df.loc[group][key] == value).astype("bool")  # without the cast it's 'boolean'
+        return iloc_by_index_and_bool(self.df, group, idx)
+
     def set_checked_by_file(self, group: int, path: str, checked: bool) -> None:
-        idx = self.df.loc[group]["path"] == path
-        row = iloc_by_index_and_bool(self.df, group, idx)
+        row = self._get_iloc_by(group, "path", path)
         col = self.df.columns.get_loc("checked")
         self.df.iat[row, col] = checked
 
@@ -270,14 +277,13 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         self.dataChanged.emit(index, index)
 
     def set_reference_by_file(self, group: int, path: str) -> None:
-        idx = self.df.loc[group]["path"] == path
-        new_row = iloc_by_index_and_bool(self.df, group, idx)
+        new_row = self._get_iloc_by(group, "path", path)
         col_prio = self.df.columns.get_loc("priority")
         col_check = self.df.columns.get_loc("checked")
         priority = self.df.iat[new_row, col_prio]
         assert priority != 0, "selected row is already the reference"
-        idx = self.df.loc[group]["priority"] == 0
-        old_row = iloc_by_index_and_bool(self.df, group, idx)
+
+        old_row = self._get_iloc_by(group, "priority", 0)
 
         self.df.iat[new_row, col_prio] = 0
         self.df.iat[old_row, col_prio] = priority
@@ -299,6 +305,49 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
             return None
         else:
             return w, h
+
+    def get_file(self, group: int, path: str, mode: str) -> Tuple[int, str, bool, int]:
+        row = self._get_iloc_by(group, "path", path)
+        try:
+            if mode == "next-in-group":
+                result = self.df.iloc[row + 1]
+                if result.name.item() != group:
+                    raise IndexError("File was last in group")
+            elif mode == "prev-in-group":
+                result = self.df.iloc[row - 1]
+                if result.name.item() != group:
+                    raise IndexError("File was first in group")
+            elif mode == "first-in-group":
+                result = self.df.loc[group].iloc[0]
+                if result["path"] == path:
+                    raise IndexError("File was first in group")
+            elif mode == "last-in-group":
+                result = self.df.loc[group].iloc[-1]
+                if result["path"] == path:
+                    raise IndexError("File was last in group")
+            elif mode == "next-group":
+                result = self.df.loc[group + 1].iloc[0]
+            elif mode == "prev-group":
+                result = self.df.loc[group - 1].iloc[0]
+            elif mode == "first-group":
+                first_group = self.df.index[0]
+                if first_group == group:
+                    raise IndexError("File was first in group")
+                result = self.df.loc[first_group].iloc[0]
+            elif mode == "last-group":
+                last_group = self.df.index[-1]
+                if last_group == group:
+                    raise IndexError("File was first in group")
+                result = self.df.loc[last_group].iloc[0]
+            else:
+                raise ValueError(f"Invalid mode: {mode}")
+
+            return result.name.item(), result["path"], result["checked"].item(), result["priority"].item()
+
+        except IndexError:
+            raise IndexError("File was first/last in group")
+        except KeyError:
+            raise IndexError("Group was first/last in list")
 
     # required by Qt
 
@@ -610,10 +659,28 @@ class PrioritizeWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.prioritize_widget)
 
 
+class MyScrollArea(QtWidgets.QScrollArea):
+
+    arrow_keys = [QtCore.Qt.Key_Left, QtCore.Qt.Key_Right, QtCore.Qt.Key_Up, QtCore.Qt.Key_Down]
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() in self.arrow_keys and event.modifiers() == QtCore.Qt.NoModifier:
+            event.ignore()
+        else:
+            super().keyPressEvent(event)
+
+
 class PictureWidget(QtWidgets.QWidget):
 
     picture_checked = QtCore.Signal(int, str, bool)
     picture_reference = QtCore.Signal(int, str)
+
+    load_next_in_group = QtCore.Signal(int, str)
+    load_prev_in_group = QtCore.Signal(int, str)
+    load_next_group = QtCore.Signal(int, str)
+    load_prev_group = QtCore.Signal(int, str)
+
+    load_file_failed = QtCore.Signal(str)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -626,7 +693,7 @@ class PictureWidget(QtWidgets.QWidget):
         self.button2.clicked[bool].connect(self.on_make_reference)
         self.label = AspectRatioPixmapLabel()
 
-        self.scroll = QtWidgets.QScrollArea(self)
+        self.scroll = MyScrollArea(self)
         self.scroll.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
         self.scroll.setWidget(self.label)
 
@@ -705,6 +772,9 @@ class PictureWidget(QtWidgets.QWidget):
             return False
 
     def load_picture(self, group: int, path: str, checked: bool, reference: bool) -> bool:
+        self.pic_group = group
+        self.pic_path = path
+
         try:
             self.pixmap = read_qt_pixmap(path)
 
@@ -718,24 +788,33 @@ class PictureWidget(QtWidgets.QWidget):
             self.button1.setEnabled(not reference)
             self.button2.setChecked(reference)
             self.button2.setEnabled(not reference)
-            self.pic_group = group
-            self.pic_path = path
             return True
         except (FileNotFoundError, ValueError) as e:
-            logging.warning("%s: %s", type(e).__name__, e)
+            self.load_file_failed.emit(f"{type(e).__name__}: {e}")
             self.label.clear()
             self.button1.setChecked(checked)
             self.button1.setEnabled(False)
             self.button2.setChecked(reference)
             self.button2.setEnabled(False)
-            self.pic_group = None
-            self.pic_path = None
             return False
 
     # qt virtual
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-        event.ignore()
+        if event.matches(QtGui.QKeySequence.MoveToNextChar):
+            self.load_next_in_group.emit(self.pic_group, self.pic_path)
+            event.accept()
+        elif event.matches(QtGui.QKeySequence.MoveToPreviousChar):
+            self.load_prev_in_group.emit(self.pic_group, self.pic_path)
+            event.accept()
+        elif event.matches(QtGui.QKeySequence.MoveToNextLine):
+            self.load_next_group.emit(self.pic_group, self.pic_path)
+            event.accept()
+        elif event.matches(QtGui.QKeySequence.MoveToPreviousLine):
+            self.load_prev_group.emit(self.pic_group, self.pic_path)
+            event.accept()
+        else:
+            event.ignore()
 
 
 class PictureWindow(QtWidgets.QMainWindow):
@@ -747,10 +826,16 @@ class PictureWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent, flags)
 
-        self.picture = PictureWidget(parent=self)
-        self.setCentralWidget(self.picture)
-        self.setStatusBar(QtWidgets.QStatusBar(self))
+        self.picture = PictureWidget(self)
+        self.statusbar_group = QtWidgets.QLabel(self)
+        self.statusbar_priority = QtWidgets.QLabel(self)
+        self.statusbar = QtWidgets.QStatusBar(self)
         self.model: Optional[GroupedPictureModel] = None
+
+        self.setCentralWidget(self.picture)
+        self.statusbar.addWidget(self.statusbar_group)
+        self.statusbar.addWidget(self.statusbar_priority)
+        self.setStatusBar(self.statusbar)
 
         button_fit_to_window = QtWidgets.QAction("&Fit to window", self)
         button_fit_to_window.setCheckable(True)
@@ -778,6 +863,12 @@ class PictureWindow(QtWidgets.QMainWindow):
         picture_menu.addAction(button_fit_to_window)
         picture_menu.addAction(button_stay_on_top)
         picture_menu.addAction(button_normalize_scale)
+
+        self.picture.load_file_failed.connect(self.on_load_file_failed)
+
+    def on_load_file_failed(self, text: str):
+        logging.warning(text)
+        self.statusbar.showMessage(text)
 
     def on_fit_to_window(self, checked: bool) -> None:
         self.picture.fit_to_window = checked
@@ -820,6 +911,19 @@ class TableWidget(QtWidgets.QWidget):
         self.model.row_checked.connect(self.on_row_checked)
         self.model.row_reference.connect(self.on_row_reference)
 
+        self.picture_window.picture.load_next_in_group.connect(self.on_load_next_in_group)
+        self.picture_window.picture.load_prev_in_group.connect(self.on_load_prev_in_group)
+        self.picture_window.picture.load_next_group.connect(self.on_load_next_group)
+        self.picture_window.picture.load_prev_group.connect(self.on_load_prev_group)
+
+    def load_picture(self, group: int, path: str, checked: bool, priority: int) -> None:
+        self.picture_window.picture.load_picture(group, path, checked, priority == 0)
+        self.picture_window.setWindowTitle(to_dos_path(path))
+        self.picture_window.statusbar_group.setText(f"Group: {group}")
+        self.picture_window.statusbar_priority.setText(f"File: {priority}")
+
+    # callbacks
+
     def on_pic_checked(self, group: int, path: str, checked: bool) -> None:
         self.model.set_checked_by_file(group, path, checked)
         self.view.viewport().repaint()
@@ -833,6 +937,34 @@ class TableWidget(QtWidgets.QWidget):
 
     def on_row_reference(self, group: int, path: str) -> None:
         self.picture_window.picture.reference_picture(group, path)
+
+    def on_load_next_in_group(self, group: int, path: str) -> None:
+        try:
+            group, path, checked, priority = self.model.get_file(group, path, "next-in-group")
+            self.load_picture(group, path, checked, priority)
+        except IndexError:
+            pass
+
+    def on_load_prev_in_group(self, group: int, path: str) -> None:
+        try:
+            group, path, checked, priority = self.model.get_file(group, path, "prev-in-group")
+            self.load_picture(group, path, checked, priority)
+        except IndexError:
+            pass
+
+    def on_load_next_group(self, group: int, path: str) -> None:
+        try:
+            group, path, checked, priority = self.model.get_file(group, path, "next-group")
+            self.load_picture(group, path, checked, priority)
+        except IndexError:
+            pass
+
+    def on_load_prev_group(self, group: int, path: str) -> None:
+        try:
+            group, path, checked, priority = self.model.get_file(group, path, "prev-group")
+            self.load_picture(group, path, checked, priority)
+        except IndexError:
+            pass
 
     def read_file(self, path: str) -> Tuple[int, int]:
         in_tz = {
@@ -862,7 +994,7 @@ class TableWidget(QtWidgets.QWidget):
         elif path.endswith(".parquet"):
             df = pd.read_parquet(path).reset_index()
         elif path.endswith(".json"):
-            df = pd.read_json(path, "table")
+            df = pd.read_json(path, orient="table")
         else:
             raise ValueError(f"Invalid file extension: {path}")
 
@@ -889,10 +1021,9 @@ class TableWidget(QtWidgets.QWidget):
         group = row.name.item()
         path = row["path"]
         checked = row["checked"].item()
-        priority = row["priority"].item() == 0
+        priority = row["priority"].item()
 
-        self.picture_window.picture.load_picture(group, path, checked, priority)
-        self.picture_window.setWindowTitle(to_dos_path(path))
+        self.load_picture(group, path, checked, priority)
         self.picture_window.show()
 
 
@@ -932,9 +1063,11 @@ class TableWindow(QtWidgets.QMainWindow):
         button_fullscreen.setStatusTip("Show window in fullscreen mode")
         button_fullscreen.triggered[bool].connect(self.on_fullscreen)
 
-        self.statusbar_label = QtWidgets.QLabel(self)
+        self.statusbar_groups = QtWidgets.QLabel(self)
+        self.statusbar_files = QtWidgets.QLabel(self)
         self.statusbar = QtWidgets.QStatusBar(self)
-        self.statusbar.addWidget(self.statusbar_label)
+        self.statusbar.addWidget(self.statusbar_groups)
+        self.statusbar.addWidget(self.statusbar_files)
         self.setStatusBar(self.statusbar)
 
         menu = self.menuBar()
@@ -952,21 +1085,24 @@ class TableWindow(QtWidgets.QMainWindow):
 
         self.picture_window.request_on_top.connect(self.on_set_top)
 
-    def set_permanent_status(self, text: str) -> None:
-        self.statusbar_label.setText(text)
-
     def set_temporary_status(self, text: str) -> None:
+        logging.debug(text)
         self.statusbar.showMessage(text)
+
+    def warn_user(self, title: str, text: str) -> None:
+        logging.error(text)
+        QtWidgets.QMessageBox.warning(self, title, text)
 
     def read_file(self, path: str) -> None:
         try:
             with MeasureTime() as stopwatch:
                 num_files, num_groups = self.table.read_file(path)
                 time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-                logging.debug("Loaded %d files in %d groups in %s", num_files, num_groups, time_delta)
-                self.set_permanent_status(f"Loaded {num_files} files in {num_groups} groups in {time_delta}")
-        except ValueError as e:
-            logging.error("Reading <%s> failed: %s", path, e)
+                self.statusbar_groups.setText(f"Groups: {num_groups}")
+                self.statusbar_files.setText(f"Files: {num_files}")
+                self.set_temporary_status(f"Loaded {num_files} files in {num_groups} groups in {time_delta}")
+        except (ValueError, KeyError) as e:
+            self.warn_user("Reading file failed", f"Reading {path} failed: {e}")
         else:
             self.button_prioritize.setEnabled(True)
 
@@ -1026,7 +1162,7 @@ class TableWindow(QtWidgets.QMainWindow):
             try:
                 self.table.to_file(self.filename)
             except ImportError as e:  # no pyarrow or fastparquet
-                logging.error("Missing dependencies for file export: %s", e)
+                self.warn_user("Writing file failed", f"Missing dependencies for file export: {e}")
 
     def on_prioritize(self) -> None:
         prioritize_window = PrioritizeWindow(self.table.model.df, parent=self)
