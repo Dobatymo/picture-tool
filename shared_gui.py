@@ -1,8 +1,10 @@
 import logging
-from typing import Optional, Tuple
+from fractions import Fraction
+from typing import Any, Dict, Optional, Tuple
 
-from genutility.pillow import NoActionNeeded, _fix_orientation
-from PIL import ExifTags, Image
+import piexif
+from genutility.pillow import NoActionNeeded, fix_orientation
+from PIL import Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 
@@ -12,12 +14,39 @@ logger = logging.getLogger(__name__)
 
 
 class QImageWithBuffer:
-    def __init__(self, image: QtGui.QImage, buffer: QtCore.QByteArray) -> None:
+    def __init__(self, image: QtGui.QImage, buffer: QtCore.QByteArray, meta: dict) -> None:
         self.image = image
         self.buffer = buffer
+        self.meta = meta
 
     def get_pixmap(self) -> QtGui.QPixmap:
         return QtGui.QPixmap.fromImage(self.image)
+
+
+def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -> Any:
+    try:
+        val = d[idx1][idx2]
+    except KeyError:
+        return None
+
+    try:
+        if dtype == "ascii":
+            return val.decode("ascii")
+        elif dtype == "utf-8":
+            return val.decode("utf-8")
+        elif dtype == "int":
+            return int(val)
+        elif dtype == "float":
+            return float(val)
+        elif dtype == "rational":
+            return Fraction(*val)
+        elif dtype == "tuple-of-rational":
+            return tuple(Fraction(*v) for v in val)
+        else:
+            raise ValueError(f"Unsupported dtype {dtype}")
+    except (ValueError, TypeError) as e:
+        print(type(e).__name__, e)
+        return None
 
 
 def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
@@ -49,13 +78,27 @@ def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
     }
 
     with Image.open(path) as img:
-        exif = img.getexif()
+        exif = piexif.load(img.info["exif"])
+
         try:
-            orientation = exif[ExifTags.Base.Orientation]
-            logger.debug("Read orientation=%d from <%s>", orientation, path)
-            img = _fix_orientation(img, orientation)
+            img = fix_orientation(img, exif)
         except (NoActionNeeded, KeyError):
             pass
+
+        meta = {
+            "make": piexif_get(exif, "0th", piexif.ImageIFD.Make, "ascii"),
+            "model": piexif_get(exif, "0th", piexif.ImageIFD.Model, "ascii"),
+            "exposure-time": piexif_get(exif, "Exif", piexif.ExifIFD.ExposureTime, "rational"),
+            "f-number": piexif_get(exif, "Exif", piexif.ExifIFD.FNumber, "rational"),
+            "iso-speed": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeed, "int"),
+            "aperture-value": piexif_get(exif, "Exif", piexif.ExifIFD.ApertureValue, "rational"),
+            "focal-length": piexif_get(exif, "Exif", piexif.ExifIFD.FocalLength, "rational"),
+            "iso": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeedRatings, "int"),
+            "GPSLatitudeRef": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitudeRef, "ascii"),
+            "GPSLatitude": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitude, "tuple-of-rational"),
+            "GPSLongitudeRef": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitudeRef, "ascii"),
+            "GPSLongitude": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
+        }
 
         if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
             # Unsupported image mode or image scanlines not 32-bit aligned
@@ -67,7 +110,7 @@ def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
         b = QtCore.QByteArray(img.tobytes())
 
     qimg = QtGui.QImage(b, img.size[0], img.size[1], qimg_format)  # , img.close
-    return QImageWithBuffer(qimg, b)
+    return QImageWithBuffer(qimg, b, meta)
 
 
 def read_qt_pixmap(path: str) -> QtGui.QPixmap:
