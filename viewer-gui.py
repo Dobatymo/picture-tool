@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -25,9 +26,11 @@ class PictureCache(QtCore.QObject):
         return self.executor.submit(read_qt_image, os.fspath(path))
 
     def put(self, path: Path) -> None:
+        logging.debug("Cache put %s", path)
         self.get(path)
 
     def load(self, path: Path) -> None:
+        logging.debug("Cache request %s", path)
         self.get(path).add_done_callback(partial(self.on_finished, path))
 
     def cache_info(self):
@@ -40,14 +43,16 @@ class PictureCache(QtCore.QObject):
     def on_finished(self, path: Path, future: Future) -> None:
         try:
             image = future.result()
+            logging.debug("Cache request fullfilled %s", path)
             self.pic_loaded.emit(path, image)
         except Exception as e:
+            logging.debug("Cache request error for <%s>. %s: %s", path, type(e).__name__, e)
             self.pic_load_failed.emit(path, e)
 
 
 class PictureWindow(QtWidgets.QMainWindow):
 
-    extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png"}
+    extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp"}
     cache_size = 10
 
     def __init__(
@@ -73,9 +78,19 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.button_fit_to_window.setStatusTip("Resize picture to fit to window")
         self.button_fit_to_window.triggered[bool].connect(self.on_fit_to_window)
 
+        button_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
+        button_rotate_cw.setStatusTip("Rotate picture clockwise (view only)")
+        button_rotate_cw.triggered.connect(self.on_rotate_cw)
+
+        button_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
+        button_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
+        button_rotate_ccw.triggered.connect(self.on_rotate_ccw)
+
         menu = self.menuBar()
-        picture_menu = menu.addMenu("&Picture")
+        picture_menu = menu.addMenu("&View")
         picture_menu.addAction(self.button_fit_to_window)
+        picture_menu.addAction(button_rotate_cw)
+        picture_menu.addAction(button_rotate_ccw)
 
         self.cache = PictureCache(self.cache_size)
         self.cache.pic_loaded.connect(self.on_pic_loaded)
@@ -99,7 +114,18 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.viewer.clear()
 
     def _get_pic_paths(self, path: Path) -> List[Path]:
-        return os_sorted([p for p in path.iterdir() if p.is_file() and p.suffix.lower() in self.extensions])
+        from datetime import timedelta
+
+        import humanize
+        from genutility.time import MeasureTime
+
+        paths = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() in self.extensions]
+        logging.debug("Found %d files in <%s>", len(paths), path)
+        with MeasureTime() as stopwatch:
+            out = os_sorted(paths)
+            time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+        logging.debug("Sorting %d picture paths took %s", len(paths), time_delta)
+        return out
 
     def try_preload(self, idx: int) -> None:
         try:
@@ -108,6 +134,7 @@ class PictureWindow(QtWidgets.QMainWindow):
             pass
 
     def load_pictures(self, paths: List[Path]) -> None:
+        logging.debug("Loading pictures: %s", ", ".join(map(os.fspath, paths)))
         if len(paths) == 0:
             return
         elif len(paths) == 1:
@@ -140,6 +167,18 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.viewer.fit_to_window = checked
 
     # signal handlers
+
+    @QtCore.Slot()
+    def on_rotate_cw(self):
+        tr = QtGui.QTransform()
+        tr.rotate(90)
+        self.viewer.label.transform(tr)
+
+    @QtCore.Slot()
+    def on_rotate_ccw(self):
+        tr = QtGui.QTransform()
+        tr.rotate(-90)
+        self.viewer.label.transform(tr)
 
     @QtCore.Slot(bool)
     def on_fit_to_window(self, checked: bool) -> None:
@@ -174,7 +213,14 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("paths", metavar="PATH", type=is_file, nargs="+", help="Open image file")
     parser.add_argument("--mode", choices=("fit", "original"), default="fit")
+    parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+        logging.getLogger("PIL").setLevel(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.INFO)
 
     app = QtWidgets.QApplication([])
 

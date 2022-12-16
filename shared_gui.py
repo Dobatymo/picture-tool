@@ -1,22 +1,26 @@
+import logging
 from typing import Optional, Tuple
 
-from PIL import Image
+from genutility.pillow import NoActionNeeded, _fix_orientation
+from PIL import ExifTags, Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 
 register_heif_opener()
 
+logger = logging.getLogger(__name__)
+
 
 class QImageWithBuffer:
-    def __init__(self, image, buffer):
+    def __init__(self, image: QtGui.QImage, buffer: QtCore.QByteArray) -> None:
         self.image = image
         self.buffer = buffer
 
-    def get_pixmap(self):
+    def get_pixmap(self) -> QtGui.QPixmap:
         return QtGui.QPixmap.fromImage(self.image)
 
 
-def read_qt_image(path: str) -> QImageWithBuffer:
+def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
 
     """Uses `pillow` to read a QPixmap from `path`.
     This supports more image formats than Qt directly.
@@ -44,17 +48,24 @@ def read_qt_image(path: str) -> QImageWithBuffer:
         "RGBX": 4,
     }
 
-    img = Image.open(path)
-    if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
-        # Unsupported image mode or image scanlines not 32-bit aligned
-        img = img.convert("RGBA")
+    with Image.open(path) as img:
+        exif = img.getexif()
+        try:
+            orientation = exif[ExifTags.Base.Orientation]
+            logger.debug("Read orientation=%d from <%s>", orientation, path)
+            img = _fix_orientation(img, orientation)
+        except (NoActionNeeded, KeyError):
+            pass
 
-    # Are there any copies created below?
-    # Because the img buffer will be freed at the end of the block.
-    # Maybe Qt's `cleanupFunction` should be used instead of a context manager.
+        if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
+            # Unsupported image mode or image scanlines not 32-bit aligned
+            img = img.convert("RGBA")
 
-    qimg_format = modemap[img.mode]
-    b = QtCore.QByteArray(img.tobytes())
+        # QImage simply references the QByteArray. So you need to keep it around.
+
+        qimg_format = modemap[img.mode]
+        b = QtCore.QByteArray(img.tobytes())
+
     qimg = QtGui.QImage(b, img.size[0], img.size[1], qimg_format)  # , img.close
     return QImageWithBuffer(qimg, b)
 
@@ -134,6 +145,10 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         self._scale_factor = value
         if self.pm is not None:
             self.scale()
+
+    def transform(self, tr: QtGui.QTransform) -> None:
+        assert self.pm is not None
+        self.setPixmap(self.pm.transformed(tr))
 
     # qt funcs
 
