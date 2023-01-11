@@ -5,6 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
 from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,6 +15,113 @@ from natsort import os_sorted
 from PySide2 import QtCore, QtGui, QtWidgets
 
 from shared_gui import PixmapViewer, QImageWithBuffer, read_qt_image
+
+APP_NAME = "picture-viewer"
+
+
+class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
+    def __init__(self, icon: QtGui.QIcon, menu: QtWidgets.QMenu, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        assert icon
+        super().__init__(icon, parent)
+        assert menu
+
+        self.menu = menu
+        self.setContextMenu(menu)
+
+        # self.menu.aboutToHide.connect(self.on_aboutToHide)
+        # self.menu.aboutToShow.connect(self.on_aboutToShow)
+        # self.menu.hovered.connect(self.on_hovered)
+        self.menu.triggered.connect(self.on_triggered)
+
+        self.activated.connect(self.on_activated)
+
+    @QtCore.Slot(QtWidgets.QSystemTrayIcon.ActivationReason)
+    def on_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        print("on_activated", self.menu)
+        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
+            self.menu.show()
+
+    """@QtCore.Slot()
+    def on_aboutToHide(self):
+        print("on_aboutToHide")
+
+    @QtCore.Slot()
+    def on_aboutToShow(self):
+        print("on_aboutToShow")"""
+
+    """@QtCore.Slot(QtWidgets.QAction)
+    def on_hovered(self, action):
+        print("on_hovered", action)"""
+
+    @QtCore.Slot(QtWidgets.QAction)
+    def on_triggered(self, action):
+        print("on_triggered", action)
+
+
+class WindowManager:
+    def __init__(self):
+        self.windows = set()  # keep references to windows around
+        self.tray: Optional[QSystemTrayIconWithMenu] = None
+        self.create_kwargs = {}
+
+    def set_create_args(self, **kwargs):
+        self.create_kwargs = kwargs
+
+    def make_tray(self, app: QtCore.QCoreApplication) -> None:
+        assert self.tray is None
+        app.setQuitOnLastWindowClosed(False)
+
+        icon = QtWidgets.QFileIconProvider().icon(QtWidgets.QFileIconProvider.Computer)
+        menu = QtWidgets.QMenu()
+
+        action_open = QtWidgets.QAction("Open new window", menu)
+        action_open.triggered.connect(self.create)
+
+        action_quit = QtWidgets.QAction("Close app", menu)
+        action_quit.setMenuRole(QtWidgets.QAction.QuitRole)
+        action_quit.triggered.connect(app.quit)
+
+        menu.addAction(action_open)
+        menu.addAction(action_quit)
+
+        self.tray = QSystemTrayIconWithMenu(icon, menu)
+        self.tray.setToolTip("picture viewer")
+
+    @QtCore.Slot()
+    def create(self):
+        return self._create(**self.create_kwargs)
+
+    @QtCore.Slot(dict)
+    def create_from_args(self, args: dict):
+        kwargs = self.create_kwargs.copy()
+        kwargs.update(args)
+        paths = kwargs.pop("paths", [])
+        _ = kwargs.pop("verbose")  # ignore
+        window = self._create(**kwargs)
+        window.load_pictures(paths)
+
+    def _create(self, *, resolve_city_names: bool, mode: str) -> "PictureWindow":
+        print(
+            "create",
+        )
+        logging.debug("Created new window: %s", {"resolve_city_names": resolve_city_names, "mode": mode})
+        window = PictureWindow(resolve_city_names)
+        window.set_fit_to_window(mode == "fit")
+        window.show()
+        window.activateWindow()
+        self.windows.add(window)
+        if self.tray is not None:
+            self.tray.setVisible(False)
+        return window
+
+    def destroy(self, window: "PictureWindow") -> None:
+        logging.debug("Destroying one window. Currently %d windows.", len(self.windows))
+        self.windows.remove(window)
+        if not self.windows and self.tray is not None:
+            self.tray.setVisible(True)
+
+
+wm = WindowManager()
 
 
 def gps_dms_to_dd(dms: List[Fraction]) -> float:
@@ -97,9 +205,16 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_file_open.setStatusTip("Open file(s)")
         button_file_open.triggered.connect(self.on_file_open)
 
-        button_file_close = QtWidgets.QAction("&Close", self)
-        button_file_close.setStatusTip("Close app")
+        button_file_close = QtWidgets.QAction("&Close window", self)
+        button_file_close.setStatusTip("Close window")
+        button_file_close.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_C))
         button_file_close.triggered.connect(self.close)
+
+        button_file_quit = QtWidgets.QAction("&Close app", self)
+        button_file_quit.setStatusTip("Close app")
+        button_file_quit.setMenuRole(QtWidgets.QAction.QuitRole)
+        button_file_quit.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Q))
+        button_file_quit.triggered.connect(QtCore.QCoreApplication.instance().quit)
 
         self.button_fit_to_window = QtWidgets.QAction("&Fit to window", self)
         self.button_fit_to_window.setCheckable(True)
@@ -119,6 +234,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         file_menu = menu.addMenu("&File")
         file_menu.addAction(button_file_open)
         file_menu.addAction(button_file_close)
+        file_menu.addAction(button_file_quit)
 
         view_menu = menu.addMenu("&View")
         view_menu.addAction(self.button_fit_to_window)
@@ -159,7 +275,7 @@ class PictureWindow(QtWidgets.QMainWindow):
             pass
 
     def load_pictures(self, paths: List[Path]) -> None:
-        logging.debug("Loading pictures from: ", ", ".join(f"<{os.fspath(p)}>" for p in paths))
+        logging.debug("Loading pictures from: %s", ", ".join(f"<{os.fspath(p)}>" for p in paths))
         if len(paths) == 0:
             return
         elif len(paths) == 1:
@@ -246,7 +362,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         if self.resolve_city_names:
             try:
                 with MeasureTime() as stopwatch:
-                    meta["city"] = self.get_location(meta["GPSLatitude"], meta["GPSLongitude"])
+                    meta["city"] = self.get_location(meta["gps-lat"], meta["gps-lon"])
                     time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
                 logging.debug("Resolving GPS coordinates took %s", time_delta)
             except KeyError:
@@ -267,6 +383,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     def on_pic_loaded(self, path: Path, image: QImageWithBuffer):
         idx = self.paths.index(path)
         self.loaded = {"path": path, "idx": idx}
+        self.setWindowTitle(f"{path.name} - {APP_NAME}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
         self.statusbar_filename.setText(path.name)
         self.statusbar_make.setText(image.meta.get("make"))
@@ -344,6 +461,38 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             event.ignore()
 
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        wm.destroy(self)
+        event.accept()
+
+
+class PyServer(QtCore.QThread):
+
+    message_received = QtCore.Signal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.name = r"\\.\pipe\asd-lol"
+
+    def prepare(self, msg):
+        if os.path.exists(self.name):
+            with Client(self.name, "AF_PIPE") as conn:
+                conn.send(msg)
+            sys.exit(0)
+        else:
+            self.start()
+
+    def run(self):
+        with Listener(self.name, "AF_PIPE") as listener:
+            while True:
+                with listener.accept() as conn:
+                    try:
+                        msg = conn.recv()
+                    except Exception as e:
+                        print(e)
+                    else:
+                        self.message_received.emit(msg)
+
 
 if __name__ == "__main__":
 
@@ -364,10 +513,16 @@ if __name__ == "__main__":
     else:
         logging.basicConfig(level=logging.INFO)
 
+    s = PyServer()
+    s.prepare(vars(args))
+    s.message_received.connect(wm.create_from_args)
+
     app = QtWidgets.QApplication([])
 
-    window = PictureWindow(args.resolve_city_names)
-    window.set_fit_to_window(args.mode == "fit")
+    wm.make_tray(app)
+    wm.set_create_args(resolve_city_names=args.resolve_city_names, mode=args.mode)
+
+    window = wm.create()
     window.showMaximized()
 
     QtCore.QTimer.singleShot(0, lambda: window.load_pictures(args.paths))
