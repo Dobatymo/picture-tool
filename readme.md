@@ -3,6 +3,13 @@
 - Add date stamps to pictures. The date/time is read from the EXIF information.
 - Resize and rotate
 
+## Setup
+
+Download cv2 models
+
+- `certutil.exe -urlcache -split -f "https://github.com/opencv/opencv_contrib/raw/master/modules/quality/samples/brisque_range_live.yml" brisque_range_live.yml`
+- `certutil.exe -urlcache -split -f "https://github.com/opencv/opencv_contrib/raw/master/modules/quality/samples/brisque_model_live.yml" brisque_model_live.yml`
+
 ## Statistics
 
 - `py statistics.py --help`

@@ -78,27 +78,28 @@ def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
     }
 
     with Image.open(path) as img:
-        exif = piexif.load(img.info["exif"])
+        if "exif" in img.info:
+            exif = piexif.load(img.info["exif"])
 
-        try:
-            img = fix_orientation(img, exif)
-        except (NoActionNeeded, KeyError):
-            pass
+            try:
+                img = fix_orientation(img, exif)
+            except (NoActionNeeded, KeyError):
+                pass
 
-        meta = {
-            "make": piexif_get(exif, "0th", piexif.ImageIFD.Make, "ascii"),
-            "model": piexif_get(exif, "0th", piexif.ImageIFD.Model, "ascii"),
-            "exposure-time": piexif_get(exif, "Exif", piexif.ExifIFD.ExposureTime, "rational"),
-            "f-number": piexif_get(exif, "Exif", piexif.ExifIFD.FNumber, "rational"),
-            "iso-speed": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeed, "int"),
-            "aperture-value": piexif_get(exif, "Exif", piexif.ExifIFD.ApertureValue, "rational"),
-            "focal-length": piexif_get(exif, "Exif", piexif.ExifIFD.FocalLength, "rational"),
-            "iso": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeedRatings, "int"),
-            "GPSLatitudeRef": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitudeRef, "ascii"),
-            "GPSLatitude": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitude, "tuple-of-rational"),
-            "GPSLongitudeRef": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitudeRef, "ascii"),
-            "GPSLongitude": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
-        }
+            meta = {
+                "make": piexif_get(exif, "0th", piexif.ImageIFD.Make, "ascii"),
+                "model": piexif_get(exif, "0th", piexif.ImageIFD.Model, "ascii"),
+                "exposure-time": piexif_get(exif, "Exif", piexif.ExifIFD.ExposureTime, "rational"),
+                "f-number": piexif_get(exif, "Exif", piexif.ExifIFD.FNumber, "rational"),
+                "iso-speed": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeed, "int"),
+                "aperture-value": piexif_get(exif, "Exif", piexif.ExifIFD.ApertureValue, "rational"),
+                "focal-length": piexif_get(exif, "Exif", piexif.ExifIFD.FocalLength, "rational"),
+                "iso": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeedRatings, "int"),
+                "gps-lat": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitude, "tuple-of-rational"),
+                "gps-lon": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
+            }
+        else:
+            meta = {}
 
         if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
             # Unsupported image mode or image scanlines not 32-bit aligned
