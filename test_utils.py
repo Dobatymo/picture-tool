@@ -70,7 +70,6 @@ class TestUtils(MyTestCase):
         pd.testing.assert_frame_equal(truth, result)
 
     def test_pd_sort_within_group_index(self):
-
         df = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]}).set_index("group")
 
         truth = df
@@ -112,7 +111,6 @@ class TestUtils(MyTestCase):
         pd.testing.assert_frame_equal(truth, result)
 
     def test_pd_sort_within_group_column(self):
-
         df = pd.DataFrame({"group": [1, 1, 1, 2], "col1": [1, 1, 2, 2], "col2": [1, 2, 3, 4]})
 
         truth = df
@@ -162,7 +160,6 @@ class TestUtils(MyTestCase):
         pd.testing.assert_frame_equal(truth, result)
 
     def test_pd_sort_within_group_index_sorted(self):
-
         df = pd.DataFrame(
             {"group": [2, 1, 1, 1, 3, 3], "col1": [1, 1, 2, 2, 3, 3], "col2": [6, 5, 4, 3, 2, 1]}
         ).set_index("group")
@@ -176,7 +173,6 @@ class TestUtils(MyTestCase):
         pd.testing.assert_frame_equal(truth, result)
 
     def test_pd_sort_within_group_column_sorted(self):
-
         df = pd.DataFrame({"group": [2, 1, 1, 1, 3, 3], "col1": [1, 1, 2, 2, 3, 3], "col2": [6, 5, 4, 3, 2, 1]})
 
         truth = pd.DataFrame(

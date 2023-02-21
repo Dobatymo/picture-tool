@@ -23,7 +23,6 @@ Locations = List[Location]
 
 class PictureWindow:
     def __init__(self, name: str = "picture") -> None:
-
         self.name = name
         cv2.startWindowThread()  # doesn't really do anything
         cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -35,7 +34,6 @@ class PictureWindow:
         cv2.destroyAllWindows()
 
     def show(self, im: RawImage, size: Optional[Tuple[int, int]] = None, from_: str = "rgb") -> None:
-
         if size:
             im = cv2.resize(im, size)
 
@@ -52,17 +50,14 @@ class PictureWindow:
         self.tick()
 
     def tick(self) -> None:
-
         cv2.waitKey(1)
 
     def showfile(self, path: str) -> None:
-
         im = cv2.imread(path)
         self.show(im)
 
 
 def crop(img: RawImage, loc: Location, context: Tuple[int, int, int, int] = (0, 0, 0, 0)) -> RawImage:
-
     top, right, bottom, left = loc  # face_recognition style
     to, ri, bo, le = context
 
@@ -78,7 +73,6 @@ def crop(img: RawImage, loc: Location, context: Tuple[int, int, int, int] = (0, 
 
 class FaceStorage:
     def __init__(self, strict_bound: float, suggest_bound: float) -> None:
-
         if suggest_bound <= strict_bound:
             raise ValueError("strict_bound must be smaller than suggest_bound")
 
@@ -94,14 +88,12 @@ class FaceStorage:
 
     @staticmethod
     def _get_versions() -> Dict[str, str]:
-
         return {
             "dlib": dlib.__version__,
             "face_recognition": face_recognition.__version__,
         }
 
     def add(self, encoding: Encoding, name: str) -> None:
-
         if not name:
             raise ValueError("name cannot be empty")
 
@@ -109,15 +101,12 @@ class FaceStorage:
         self._names.append(name)
 
     def unknown(self, encoding: Encoding) -> None:
-
         self._unknown.append(encoding)
 
     def skipped(self, encoding: Encoding) -> None:
-
         self._skipped.append(encoding)
 
     def _closest(self, encodings: Encodings, encoding: Encoding) -> Tuple[List[int], List[int]]:
-
         dists = face_recognition.face_distance(encodings, encoding)
 
         suggest = [i for i, d in enumerate(dists) if d <= self.suggest_bound and d > self.strict_bound]
@@ -126,30 +115,24 @@ class FaceStorage:
         return sure, suggest
 
     def closest(self, encoding: Encoding) -> Tuple[List[int], List[int]]:
-
         return self._closest(self._encodings, encoding)
 
     def is_unknown(self, encoding: Encoding) -> bool:
-
         a, b = self._closest(self._unknown, encoding)
         return bool(a)
 
     def is_skipped(self, encoding: Encoding) -> bool:
-
         a, b = self._closest(self._skipped, encoding)
         return bool(a)
 
     def get_names(self, indices: Iterable[int]) -> List[str]:
-
         return [self._names[i] for i in indices]
 
     def __getstate__(self):
-
         state = self.__dict__.copy()
         return state
 
     def __setstate__(self, state):
-
         if state["_versions"] != self._get_versions():
             logging.warning("dlib and face_recognition versions of pickled object and current environment don't match")
 
@@ -157,7 +140,6 @@ class FaceStorage:
 
 
 def get_features(entry: PathType) -> Tuple[PathType, Locations, Encodings]:
-
     img = face_recognition.load_image_file(os.fspath(entry))
 
     locations = face_recognition.face_locations(img)
@@ -170,7 +152,6 @@ def get_features(entry: PathType) -> Tuple[PathType, Locations, Encodings]:
 
 
 def get_faces(paths: Iterable[PathType]) -> Iterator[Tuple[PathType, Location, Encoding]]:
-
     try:
         for entry, locations, encodings in parallel_map(get_features, paths, bufsize=100):
             for loc, enc in zip(locations, encodings):
@@ -182,41 +163,34 @@ def get_faces(paths: Iterable[PathType]) -> Iterator[Tuple[PathType, Location, E
 
 class VectorStorage:
     def __init__(self) -> None:
-
         self.d: DefaultDict[str, Dict[Location, Encoding]] = defaultdict(dict)
 
         self._versions = self._get_versions()
 
     @staticmethod
     def _get_versions() -> Dict[str, str]:
-
         return {
             "dlib": dlib.__version__,
             "face_recognition": face_recognition.__version__,
         }
 
     def add(self, path: str, location: Location, encoding: Encoding) -> None:
-
         if not isinstance(path, str):
             raise TypeError("path must be str")
 
         self.d[path][location] = encoding
 
     def hasfile(self, path: str) -> bool:
-
         return path in self.d
 
     def encodings(self, path: str) -> Iterator[Tuple[Location, Encoding]]:
-
         yield from self.d[path].items()
 
     def __getstate__(self) -> dict:
-
         state = self.__dict__.copy()
         return state
 
     def __setstate__(self, state: dict) -> None:
-
         if state["_versions"] != self._get_versions():
             logging.warning("dlib and face_recognition versions of pickled object and current environment don't match")
 
@@ -224,7 +198,6 @@ class VectorStorage:
 
 
 def label(paths: Iterable[PathType], fdb: FaceStorage, vdb: VectorStorage) -> None:
-
     with PictureWindow() as win:
 
         def uncached_paths(paths):
@@ -234,7 +207,6 @@ def label(paths: Iterable[PathType], fdb: FaceStorage, vdb: VectorStorage) -> No
                     yield p
 
         for entry, loc, enc in get_faces(uncached_paths(paths)):
-
             vdb.add(os.fspath(entry), loc, enc)
 
             if fdb.is_skipped(enc):
@@ -271,7 +243,6 @@ def label(paths: Iterable[PathType], fdb: FaceStorage, vdb: VectorStorage) -> No
 
 
 if __name__ == "__main__":
-
     from argparse import ArgumentParser
 
     from genutility.args import is_dir

@@ -97,7 +97,6 @@ ALL_COLUMNS = [
 
 
 def get_dataframe_by_iter(pathiter: Iterable[EntryLike]) -> pd.DataFrame:
-
     values = []
     for path in pathiter:
         filepath = fspath(path)
@@ -130,7 +129,6 @@ def get_dataframe_by_path(path):
 
 
 if __name__ == "__main__":
-
     from argparse import ArgumentParser
     from datetime import timedelta
 

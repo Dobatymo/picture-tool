@@ -37,25 +37,29 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
 
     @QtCore.Slot(QtWidgets.QSystemTrayIcon.ActivationReason)
     def on_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
-        print("on_activated", self.menu)
+        logging.debug("%s", self.menu)
         if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
             self.menu.show()
 
-    """@QtCore.Slot()
+    """
+    @QtCore.Slot()
     def on_aboutToHide(self):
-        print("on_aboutToHide")
+        logging.debug("called")
 
     @QtCore.Slot()
     def on_aboutToShow(self):
-        print("on_aboutToShow")"""
+        logging.debug("called")
+    """
 
-    """@QtCore.Slot(QtWidgets.QAction)
+    """
+    @QtCore.Slot(QtWidgets.QAction)
     def on_hovered(self, action):
-        print("on_hovered", action)"""
+        logging.debug("%s", action)
+    """
 
     @QtCore.Slot(QtWidgets.QAction)
     def on_triggered(self, action):
-        print("on_triggered", action)
+        logging.debug("%s", action)
 
 
 class WindowManager:
@@ -85,14 +89,14 @@ class WindowManager:
         menu.addAction(action_quit)
 
         self.tray = QSystemTrayIconWithMenu(icon, menu)
-        self.tray.setToolTip("picture viewer")
+        self.tray.setToolTip(APP_NAME)
 
     @QtCore.Slot()
-    def create(self):
+    def create(self) -> "PictureWindow":
         return self._create(**self.create_kwargs)
 
     @QtCore.Slot(dict)
-    def create_from_args(self, args: dict):
+    def create_from_args(self, args: dict) -> None:
         kwargs = self.create_kwargs.copy()
         kwargs.update(args)
         paths = kwargs.pop("paths", [])
@@ -100,16 +104,18 @@ class WindowManager:
         window = self._create(**kwargs)
         window.load_pictures(paths)
 
-    def _create(self, *, resolve_city_names: bool, mode: str) -> "PictureWindow":
-        print(
-            "create",
-        )
-        logging.debug("Created new window: %s", {"resolve_city_names": resolve_city_names, "mode": mode})
+    def _create(self, *, maximized: bool, resolve_city_names: bool, mode: str) -> "PictureWindow":
+        kwargs = locals()
+        kwargs.pop("self")
+        logging.debug("Created new window: %s", kwargs)
         window = PictureWindow(resolve_city_names)
-        window.set_fit_to_window(mode == "fit")
-        window.show()
-        window.activateWindow()
         self.windows.add(window)
+        window.set_fit_to_window(mode == "fit")
+        if maximized:
+            window.showMaximized()
+        else:
+            window.show()
+        window.activateWindow()
         if self.tray is not None:
             self.tray.setVisible(False)
         return window
@@ -129,7 +135,6 @@ def gps_dms_to_dd(dms: List[Fraction]) -> float:
 
 
 class PictureCache(QtCore.QObject):
-
     pic_loaded = QtCore.Signal(Path, QImageWithBuffer)
     pic_load_failed = QtCore.Signal(Path, Exception)
 
@@ -167,7 +172,6 @@ class PictureCache(QtCore.QObject):
 
 
 class PictureWindow(QtWidgets.QMainWindow):
-
     extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp"}
     cache_size = 10
     deleted_subdir = "deleted"
@@ -358,7 +362,6 @@ class PictureWindow(QtWidgets.QMainWindow):
         return self.rg.get(lat_lon)["name"]
 
     def make_cam_info_string(self, meta: dict) -> str:
-
         if self.resolve_city_names:
             try:
                 with MeasureTime() as stopwatch:
@@ -467,14 +470,13 @@ class PictureWindow(QtWidgets.QMainWindow):
 
 
 class PyServer(QtCore.QThread):
-
     message_received = QtCore.Signal(dict)
 
     def __init__(self):
         super().__init__()
         self.name = r"\\.\pipe\asd-lol"
 
-    def prepare(self, msg):
+    def prepare(self, msg: Optional[dict]):
         if os.path.exists(self.name):
             with Client(self.name, "AF_PIPE") as conn:
                 conn.send(msg)
@@ -488,30 +490,43 @@ class PyServer(QtCore.QThread):
                 with listener.accept() as conn:
                     try:
                         msg = conn.recv()
-                    except Exception as e:
-                        print(e)
-                    else:
-                        self.message_received.emit(msg)
+                        logging.debug("Received message: %s", msg)
+                    except EOFError:
+                        logging.error("Receiving message failed: EOFError")
+                        continue
+                    except Exception:
+                        logging.exception("Receiving message failed")
+                        continue
+
+                    if msg is None:
+                        break
+
+                    self.message_received.emit(msg)
+
+    def stop(self):
+        with Client(self.name, "AF_PIPE") as conn:
+            conn.send(None)
 
 
 if __name__ == "__main__":
-
     from argparse import ArgumentParser
 
     from genutility.args import is_file
 
     parser = ArgumentParser()
-    parser.add_argument("paths", metavar="PATH", type=is_file, nargs="+", help="Open image file")
+    parser.add_argument("paths", metavar="PATH", type=is_file, nargs="*", help="Open image file")
     parser.add_argument("--mode", choices=("fit", "original"), default="fit")
     parser.add_argument("--resolve-city-names", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
+    log_fmt = "%(levelname)s:%(name)s:%(funcName)s:%(message)s"
+
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG, format=log_fmt)
         logging.getLogger("PIL").setLevel(level=logging.INFO)
     else:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.INFO, format=log_fmt)
 
     s = PyServer()
     s.prepare(vars(args))
@@ -520,11 +535,16 @@ if __name__ == "__main__":
     app = QtWidgets.QApplication([])
 
     wm.make_tray(app)
-    wm.set_create_args(resolve_city_names=args.resolve_city_names, mode=args.mode)
+    wm.set_create_args(maximized=True, resolve_city_names=args.resolve_city_names, mode=args.mode)
 
     window = wm.create()
-    window.showMaximized()
 
     QtCore.QTimer.singleShot(0, lambda: window.load_pictures(args.paths))
 
-    sys.exit(app.exec_())
+    ret = app.exec_()
+    s.stop()
+    if not s.wait(1000):
+        logging.error("Background thread failed to exit in time")
+
+    logging.debug("App exit code: %d", ret)
+    sys.exit(ret)
