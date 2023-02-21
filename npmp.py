@@ -41,6 +41,12 @@ class SharedNdarray:
         shm = SharedMemory(create=True, size=nbytes)
         return SharedNdarray(shm, shape, dtype)
 
+    @classmethod
+    def from_array(cls, arr: np.ndarray) -> "SharedNdarray":
+        shm = SharedMemory(create=True, size=arr.nbytes)
+        shm.buf[:] = arr.tobytes()
+        return SharedNdarray(shm, arr.shape, arr.dtype)
+
     def reshape(self, shape: Shape) -> "SharedNdarray":
         if self.size != prod(shape):
             raise ValueError("New shape is not compatible with old shape")
@@ -57,14 +63,16 @@ def chunked_parallel_task(
     b_arr: SharedNdarray,
     a_idx: Indices,
     b_idx: Indices,
-    coords: Shape,
+    coords: Optional[Shape],
     **kwargs,
 ) -> np.ndarray:
-
     a = a_arr.getarray()
     b = b_arr.getarray()
 
-    return func(a[a_idx], b[b_idx], coords, **kwargs)
+    if coords is None:
+        return func(a[a_idx], b[b_idx], **kwargs)
+    else:
+        return func(a[a_idx], b[b_idx], coords, **kwargs)
 
 
 def _1d_iter(outshape: Shape, chunkshape: Shape) -> Iterator[Tuple[int]]:
@@ -83,10 +91,10 @@ def chunked_parallel(
     a_arr: SharedNdarray,
     b_arr: SharedNdarray,
     chunkshape: Shape,
+    pass_coords: bool,
     parallel: Optional[int] = None,
     **kwargs,
 ) -> Iterator[T]:
-
     outshape = broadcast_shapes(a_arr.shape, b_arr.shape)
     select_broadcasted_axis = slice(0, 1)
 
@@ -111,12 +119,16 @@ def chunked_parallel(
                 a_idx = (aix, slice(None))
                 b_idx = (bix, slice(None))
 
-                future = executor.submit(chunked_parallel_task, func, a_arr, b_arr, a_idx, b_idx, coords=(x,), **kwargs)
+                if pass_coords:
+                    coords = (x,)
+                else:
+                    coords = None
+
+                future = executor.submit(chunked_parallel_task, func, a_arr, b_arr, a_idx, b_idx, coords, **kwargs)
                 futures.append(future)
 
         elif len(outshape) == 3:
             for x, y in _2d_iter(outshape, chunkshape):
-
                 if a_arr.shape[0] != outshape[0]:
                     aix = select_broadcasted_axis
                 else:
@@ -139,9 +151,12 @@ def chunked_parallel(
 
                 a_idx = (aix, aiy, slice(None))
                 b_idx = (bix, biy, slice(None))
-                future = executor.submit(
-                    chunked_parallel_task, func, a_arr, b_arr, a_idx, b_idx, coords=(x, y), **kwargs
-                )
+                if pass_coords:
+                    coords = (x, y)
+                else:
+                    coords = None
+
+                future = executor.submit(chunked_parallel_task, func, a_arr, b_arr, a_idx, b_idx, coords, **kwargs)
                 futures.append(future)
 
         else:
@@ -153,16 +168,23 @@ def chunked_parallel(
 
 class ChunkedParallel(Generic[T]):
     def __init__(
-        self, func: Callable[..., T], a_arr: SharedNdarray, b_arr: SharedNdarray, chunkshape: Shape, **kwargs: Any
+        self,
+        func: Callable[..., T],
+        a_arr: SharedNdarray,
+        b_arr: SharedNdarray,
+        chunkshape: Shape,
+        pass_coords: bool = True,
+        **kwargs: Any,
     ) -> None:
         self.func = func
         self.a_arr = a_arr
         self.b_arr = b_arr
         self.chunkshape = chunkshape
+        self.pass_coords = pass_coords
         self.kwargs = kwargs
 
     def __iter__(self) -> Iterator[T]:
-        return chunked_parallel(self.func, self.a_arr, self.b_arr, self.chunkshape, **self.kwargs)
+        return chunked_parallel(self.func, self.a_arr, self.b_arr, self.chunkshape, self.pass_coords, **self.kwargs)
 
     def __len__(self) -> int:
         outshape = broadcast_shapes(self.a_arr.shape, self.b_arr.shape)[:-1]

@@ -22,7 +22,6 @@ class RotateFailed(Exception):
 
 
 def dt_gps_from_exif(exif: dict) -> datetime:
-
     try:
         datestamp = exif["GPS"][piexif.GPSIFD.GPSDateStamp].decode("ascii")
         timestamp = exif["GPS"][piexif.GPSIFD.GPSTimeStamp]
@@ -43,7 +42,6 @@ def dt_gps_from_exif(exif: dict) -> datetime:
 def get_original_date(
     exif: dict, aslocal: bool = True, sources: Iterable[str] = ("exif-original", "exif-digitized", "gps")
 ) -> datetime:
-
     """Returns the original picture date from exif date or raises `NoDateFound`.
 
     Input:
@@ -89,7 +87,6 @@ def add_date(
     fillcolor: str = "white",
     outlinecolor: str = "black",
 ) -> Tuple[Image, Dict[str, Any]]:
-
     try:
         exif = piexif.load(image.info["exif"])
     except KeyError as e:
@@ -111,7 +108,6 @@ def add_date(
 
 
 def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: Optional[str] = None) -> bool:
-
     if inpath.resolve() == outpath.resolve():
         raise ValueError("inpath cannot be equal to output")
 
@@ -126,19 +122,16 @@ def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: O
     modified = False
 
     try:
-
         if args.resize:
             image.thumbnail(args.maxsize, reducing_gap=None)  # inplace
             modified = True
 
         if args.add_date:  # implies rotate
-
             image, kwargs = add_date(image, args.align, args.fontsize, args.padding, args.fill, args.outline)
             kwargs.update(kwargs)
             modified = True
 
         elif args.rotate:
-
             # warning: this is not lossless
 
             try:

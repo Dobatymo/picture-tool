@@ -38,7 +38,6 @@ def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
 
 
 def cv2_iqa_score(path: str) -> Dict[str, float]:
-
     img = cv2.imread(path)
     grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -50,7 +49,6 @@ def cv2_iqa_score(path: str) -> Dict[str, float]:
 
 
 def torch_iqa_score(path: str) -> Dict[str, float]:
-
     with Image.open(path) as img:
         x = f.to_tensor(img).unsqueeze(0)
     grey = f.rgb_to_grayscale(x)

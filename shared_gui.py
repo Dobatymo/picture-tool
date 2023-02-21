@@ -50,7 +50,6 @@ def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -
 
 
 def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
-
     """Uses `pillow` to read a QPixmap from `path`.
     This supports more image formats than Qt directly.
     """
@@ -125,7 +124,6 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         fixed_size: Optional[QtCore.QSize] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
-
         """If `fit_to_widget` is True, the label will be resized to match the parent widgets size.
         If it's False, it will be resized to the images original size.
         """
@@ -207,7 +205,6 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
     # qt event handlers
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-
         # The label doesn't get `resizeEvent`s when `QScrollArea.widgetResizable()` is False.
         # `resizeEvent`s are however triggered by the labels `self.adjustSize()`,
         # so when setting a new pixmap, a resize event could still be triggered
@@ -221,7 +218,6 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
 
 
 class PixmapViewer(QtWidgets.QScrollArea):
-
     scale_changed = QtCore.Signal(float)
 
     arrow_keys = [QtCore.Qt.Key_Left, QtCore.Qt.Key_Right, QtCore.Qt.Key_Up, QtCore.Qt.Key_Down]

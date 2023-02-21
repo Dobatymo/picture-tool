@@ -51,7 +51,6 @@ read_qt_pixmap = lru_cache(maxsize=PIC_CACHE_SIZE)(read_qt_pixmap)
 
 
 def show_in_file_manager(path: str) -> None:
-
     if platform.system() == "Windows":
         path = to_dos_path(path)
         args = f'explorer /select,"{path}"'
@@ -61,7 +60,6 @@ def show_in_file_manager(path: str) -> None:
 
 
 def open_using_default_app(path: str) -> None:
-
     if platform.system() == "Windows":  # Windows
         os.startfile(path)
     elif platform.system() == "Darwin":  # macOS
@@ -75,7 +73,6 @@ def slice_to_list(value: slice) -> list:
 
 
 def iloc_by_index_and_bool(df, index: int, bool_idx: pd.Series) -> int:
-
     if bool_idx.dtype != "bool":
         raise TypeError(f"bool_idx must be a 'bool' series, not '{bool_idx.dtype}'")
 
@@ -443,7 +440,6 @@ class PrioritizeWidget(QtWidgets.QWidget):
     # callbacks
 
     def on_prioritize(self) -> None:
-
         # sorting by multiple keys, ie. using secondary keys to break ambiguities by the first key,
         # requires sorting in reverse key order with a stable sorting algorithm
 
@@ -531,7 +527,6 @@ class PrioritizeWindow(QtWidgets.QMainWindow):
 
 
 class PictureWidget(QtWidgets.QWidget):
-
     picture_checked = QtCore.Signal(int, str, bool)
     picture_reference = QtCore.Signal(int, str)
 
@@ -660,7 +655,6 @@ class PictureWidget(QtWidgets.QWidget):
 
 
 class PictureWindow(QtWidgets.QMainWindow):
-
     request_on_top = QtCore.Signal(bool)
 
     def __init__(
@@ -981,7 +975,6 @@ class TableWindow(QtWidgets.QMainWindow):
             self.read_file(path)
 
     def on_file_save(self, checked: bool) -> None:
-
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
         dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptSave)
@@ -1045,7 +1038,6 @@ class TableWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
-
     from argparse import ArgumentParser
 
     from genutility.args import is_file

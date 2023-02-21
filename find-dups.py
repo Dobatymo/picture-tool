@@ -329,7 +329,6 @@ def get_hashes(
     db: Optional[HashDB] = None,
     parallel_read: Optional[int] = None,
 ) -> HashResultT:
-
     if metric == "equivalence":
         hash2paths: DefaultDict[bytes, Set[str]] = defaultdict(set)
     elif metric == "hamming":
@@ -491,7 +490,6 @@ def get_dupe_groups(
 
 
 def main() -> None:
-
     try:
         config_path = DEFAULT_APPDATA_DIR / "config.json"
         default_config = {k.replace("-", "_"): v for k, v in read_json(config_path).items()}

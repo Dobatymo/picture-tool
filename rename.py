@@ -18,7 +18,6 @@ modelmap = {
 
 
 def get_items(path: Path) -> Dict[str, Any]:
-
     exif_dict = piexif.load(fspath(path))
 
     maker = exif_dict["0th"][271].decode("ascii")
@@ -116,7 +115,7 @@ def main() -> None:
         for i, (path, items) in enumerate(_files):
             items["count"] = i
             try:
-                newpath = with_stem(path, args.tpl.format(**items))
+                newpath = with_stem(path, args.tpl.format_map(items))
             except KeyError:
                 newpath = path.with_suffix(".stripped" + path.suffix)
 
@@ -124,5 +123,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-
     main()
