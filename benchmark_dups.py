@@ -2,6 +2,8 @@ from typing import Optional, Tuple
 
 import dask.array as da
 import numpy as np
+from dask.diagnostics import ProgressBar
+from genutility.iter import progress
 from genutility.time import PrintStatementTime
 from genutility.typing import SizedIterable
 
@@ -39,9 +41,10 @@ def main(engine: str, dims: Tuple[int, int], chunksize: Tuple[int, int], seed: O
             if engine == "numpy":
                 out = do(np, np_arr)
             elif engine == "npmp":
-                out = np.concatenate(list(l2_dups_npmp(SharedNdarray.from_array(np_arr), chunksize)))
+                out = np.concatenate(list(progress(l2_dups_npmp(SharedNdarray.from_array(np_arr), chunksize))))
             elif engine == "dask":
-                out = do(da, da.from_array(np_arr, chunks=chunksize)).compute()
+                with ProgressBar():
+                    out = do(da, da.from_array(np_arr, chunks=chunksize)).compute()
             else:
                 raise ValueError(engine)
     except MemoryError as e:
