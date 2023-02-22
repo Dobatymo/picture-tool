@@ -176,7 +176,7 @@ requests = "*"
 type = "git"
 url = "https://github.com/Dobatymo/filemeta.git"
 reference = "HEAD"
-resolved_reference = "a15735e7c9f75244bcfbd5b9fe6acc87a3deb2f1"
+resolved_reference = "9bdabafb0580292801001f77591b6dfdd273c0cc"
 
 [[package]]
 name = "fonttools"
@@ -918,6 +918,14 @@ pymysql = ["pymysql", "pymysql (<1)"]
 sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
+name = "threadpoolctl"
+version = "3.1.0"
+description = "threadpoolctl"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+
+[[package]]
 name = "tifffile"
 version = "2022.10.10"
 description = "Read and write TIFF files"
@@ -1041,7 +1049,7 @@ quality = ["opencv-contrib-python", "image-quality", "scikit-image", "piq", "tor
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.8,<3.11"
-content-hash = "722dc9ef070c2d0788814ee83b3de1906345e14bbcb5c38296c10380975822ef"
+content-hash = "8e032b2e499fe92709fef94c31fd4fcc58e6733d91226fea2d2db43c24e4e4e0"
 
 [metadata.files]
 appdirs = [
@@ -2030,6 +2038,10 @@ sqlalchemy = [
     {file = "SQLAlchemy-1.4.46-cp39-cp39-win32.whl", hash = "sha256:51e1ba2884c6a2b8e19109dc08c71c49530006c1084156ecadfaadf5f9b8b053"},
     {file = "SQLAlchemy-1.4.46-cp39-cp39-win_amd64.whl", hash = "sha256:315676344e3558f1f80d02535f410e80ea4e8fddba31ec78fe390eff5fb8f466"},
     {file = "SQLAlchemy-1.4.46.tar.gz", hash = "sha256:6913b8247d8a292ef8315162a51931e2b40ce91681f1b6f18f697045200c4a30"},
+]
+threadpoolctl = [
+    {file = "threadpoolctl-3.1.0-py3-none-any.whl", hash = "sha256:8b99adda265feb6773280df41eece7b2e6561b772d21ffd52e372f999024907b"},
+    {file = "threadpoolctl-3.1.0.tar.gz", hash = "sha256:a335baacfaa4400ae1f0d8e3a58d6674d2f8828e3716bb2802c44955ad391380"},
 ]
 tifffile = [
     {file = "tifffile-2022.10.10-py3-none-any.whl", hash = "sha256:87f3aee8a0d06b74655269a105de75c1958a24653e1930d523eb516100043503"},

@@ -1,3 +1,4 @@
+import os
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import reduce
 from multiprocessing.shared_memory import SharedMemory
@@ -5,10 +6,13 @@ from typing import Any, Callable, Generic, Iterator, List, Optional, Tuple, Type
 
 import numpy as np
 from genutility.numpy import broadcast_shapes, get_num_chunks
+from threadpoolctl import threadpool_limits
 
 Shape = Tuple[int, ...]
 Indices = Tuple[slice, ...]
 T = TypeVar("T")
+
+THREADPOOL_LIMIT = None
 
 
 def prod(shape):
@@ -122,6 +126,12 @@ def chunked_parallel(
     if len(outshape) - len(chunkshape) != 1:
         raise ValueError("Length of `chunkshape` must be one less the number of input dimensions")
 
+    """ The default `max_workers=None` value for `ThreadPoolExecutor` uses `min(32, os.cpu_count() + 4),
+        because IO workloads are assumed. Here we have CPU bound workloads however.
+    """
+    if parallel is None:
+        parallel = os.cpu_count()
+
     if backend == "threading":
         executor = ThreadPoolExecutor(parallel)
         executor_task = chunked_parallel_task_mt
@@ -138,7 +148,7 @@ def chunked_parallel(
 
     futures: List[Future] = []
 
-    with executor as exe:
+    with executor as exe, threadpool_limits(limits=THREADPOOL_LIMIT):
         if len(outshape) == 2:
             for (x,) in _1d_iter(outshape, chunkshape):
                 if a_arr.shape[0] != outshape[0]:
