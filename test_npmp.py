@@ -2,7 +2,6 @@ from unittest import TestCase
 
 import numpy as np
 from genutility.test import parametrize
-from genutility.typing import SizedIterable
 
 from npmp import ChunkedParallel, SharedNdarray
 
