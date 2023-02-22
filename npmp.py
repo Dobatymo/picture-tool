@@ -1,7 +1,7 @@
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import reduce
 from multiprocessing.shared_memory import SharedMemory
-from typing import Any, Callable, Generic, Iterator, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import numpy as np
 from genutility.numpy import broadcast_shapes, get_num_chunks
@@ -15,7 +15,11 @@ def prod(shape):
     return reduce(lambda a, b: a * b, shape, 1)
 
 
-class SharedNdarray:
+class BaseArray:
+    shape: Shape
+
+
+class SharedNdarray(BaseArray):
     shm: SharedMemory
     shape: Shape
     dtype: type
@@ -57,7 +61,22 @@ class SharedNdarray:
         return f"<SharedNdarray shm.name={self.shm.name} shape={self.shape} dtype={self.dtype.__name__} shm.buf={self.shm.buf[:10].hex()}...>"
 
 
-def chunked_parallel_task(
+def chunked_parallel_task_mt(
+    func: Callable[..., Any],
+    a_arr: np.ndarray,
+    b_arr: np.ndarray,
+    a_idx: Indices,
+    b_idx: Indices,
+    coords: Optional[Shape],
+    **kwargs,
+) -> np.ndarray:
+    if coords is None:
+        return func(a_arr[a_idx], b_arr[b_idx], **kwargs)
+    else:
+        return func(a_arr[a_idx], b_arr[b_idx], coords, **kwargs)
+
+
+def chunked_parallel_task_mp(
     func: Callable[..., Any],
     a_arr: SharedNdarray,
     b_arr: SharedNdarray,
@@ -87,10 +106,12 @@ def _2d_iter(outshape: Shape, chunkshape: Shape) -> Iterator[Tuple[int, int]]:
 
 
 def chunked_parallel(
+    backend: str,
     func: Callable[..., T],
-    a_arr: SharedNdarray,
-    b_arr: SharedNdarray,
+    a_arr: Union[np.ndarray, SharedNdarray],
+    b_arr: Union[np.ndarray, SharedNdarray],
     chunkshape: Shape,
+    ordered: bool,
     pass_coords: bool,
     parallel: Optional[int] = None,
     **kwargs,
@@ -101,9 +122,23 @@ def chunked_parallel(
     if len(outshape) - len(chunkshape) != 1:
         raise ValueError("Length of `chunkshape` must be one less the number of input dimensions")
 
+    if backend == "threading":
+        executor = ThreadPoolExecutor(parallel)
+        executor_task = chunked_parallel_task_mt
+    elif backend == "multiprocessing":
+        if not isinstance(a_arr, SharedNdarray) or not isinstance(b_arr, SharedNdarray):
+            raise TypeError(
+                f"Input arrays must be of type `SharedNdarray` not `{type(a_arr)}`, `{type(b_arr)}` for multiprocessing"
+            )
+
+        executor = ProcessPoolExecutor(parallel)
+        executor_task = chunked_parallel_task_mp
+    else:
+        raise ValueError(f"Invalid backend: {backend}")
+
     futures: List[Future] = []
 
-    with ProcessPoolExecutor(parallel) as executor:
+    with executor as exe:
         if len(outshape) == 2:
             for (x,) in _1d_iter(outshape, chunkshape):
                 if a_arr.shape[0] != outshape[0]:
@@ -124,7 +159,7 @@ def chunked_parallel(
                 else:
                     coords = None
 
-                future = executor.submit(chunked_parallel_task, func, a_arr, b_arr, a_idx, b_idx, coords, **kwargs)
+                future = exe.submit(executor_task, func, a_arr, b_arr, a_idx, b_idx, coords, **kwargs)
                 futures.append(future)
 
         elif len(outshape) == 3:
@@ -156,35 +191,55 @@ def chunked_parallel(
                 else:
                     coords = None
 
-                future = executor.submit(chunked_parallel_task, func, a_arr, b_arr, a_idx, b_idx, coords, **kwargs)
+                future = exe.submit(executor_task, func, a_arr, b_arr, a_idx, b_idx, coords, **kwargs)
                 futures.append(future)
 
         else:
-            raise ValueError("Input must either be 2 or 3 dimensional")
+            raise ValueError(f"Input must either be 2 or 3 dimensional. It's {len(outshape)}.")
 
-        for future in as_completed(futures):
-            yield future.result()
+        if ordered:
+            for future in futures:
+                yield future.result()
+        else:
+            for future in as_completed(futures):
+                yield future.result()
 
 
 class ChunkedParallel(Generic[T]):
     def __init__(
         self,
         func: Callable[..., T],
-        a_arr: SharedNdarray,
-        b_arr: SharedNdarray,
+        a_arr: Union[np.ndarray, SharedNdarray],
+        b_arr: Union[np.ndarray, SharedNdarray],
         chunkshape: Shape,
+        backend: str = "multiprocessing",
+        ordered: bool = False,
         pass_coords: bool = True,
+        parallel: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         self.func = func
         self.a_arr = a_arr
         self.b_arr = b_arr
         self.chunkshape = chunkshape
+        self.backend = backend
+        self.ordered = ordered
         self.pass_coords = pass_coords
+        self.parallel = parallel
         self.kwargs = kwargs
 
     def __iter__(self) -> Iterator[T]:
-        return chunked_parallel(self.func, self.a_arr, self.b_arr, self.chunkshape, self.pass_coords, **self.kwargs)
+        return chunked_parallel(
+            self.backend,
+            self.func,
+            self.a_arr,
+            self.b_arr,
+            self.chunkshape,
+            self.ordered,
+            self.pass_coords,
+            self.parallel,
+            **self.kwargs,
+        )
 
     def __len__(self) -> int:
         outshape = broadcast_shapes(self.a_arr.shape, self.b_arr.shape)[:-1]
