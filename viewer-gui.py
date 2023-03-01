@@ -16,10 +16,13 @@ from PySide2 import QtCore, QtGui, QtWidgets
 
 from shared_gui import PixmapViewer, QImageWithBuffer, read_qt_image
 
+APP_AUTHOR = "Dobatymo"
 APP_NAME = "picture-viewer"
 
 
 class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
+    doubleclicked = QtCore.Signal()
+
     def __init__(self, icon: QtGui.QIcon, menu: QtWidgets.QMenu, parent: Optional[QtWidgets.QWidget] = None) -> None:
         assert icon
         super().__init__(icon, parent)
@@ -40,6 +43,8 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
         logging.debug("%s", self.menu)
         if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
             self.menu.show()
+        elif reason == QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.doubleclicked.emit()
 
     """
     @QtCore.Slot()
@@ -90,6 +95,7 @@ class WindowManager:
 
         self.tray = QSystemTrayIconWithMenu(icon, menu)
         self.tray.setToolTip(APP_NAME)
+        self.tray.doubleclicked.connect(self.create)
 
     @QtCore.Slot()
     def create(self) -> "PictureWindow":
@@ -172,6 +178,10 @@ class PictureCache(QtCore.QObject):
 
 
 class PictureWindow(QtWidgets.QMainWindow):
+    last_action: str
+    loaded: Optional[dict]
+    path_idx: int
+
     extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp"}
     cache_size = 10
     deleted_subdir = "deleted"
@@ -184,6 +194,8 @@ class PictureWindow(QtWidgets.QMainWindow):
         flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags(),
     ) -> None:
         super().__init__(parent, flags)
+
+        self.last_action = "none"
 
         self.resolve_city_names = resolve_city_names
         self.viewer = PixmapViewer(self)
@@ -252,13 +264,23 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.viewer.scale_changed.connect(self.on_scale_changed)
 
         self.paths: List[Path] = []
-        self.idx: int = -1
-        self.loaded: Optional[dict] = None
+        self._view_clear()
 
         if self.resolve_city_names:
             import reverse_geocoder
 
             self.rg = reverse_geocoder
+
+    def _view_clear(self) -> None:
+        self.path_idx = -1
+        self.loaded = None
+        self.setWindowTitle(APP_NAME)
+        self.statusbar_number.setText(None)
+        self.statusbar_filename.setText(None)
+        self.statusbar_make.setText(None)
+        self.statusbar_model.setText(None)
+        self.statusbar_info.setText(None)
+        self.viewer.clear()
 
     def _get_pic_paths(self, path: Path) -> List[Path]:
         with MeasureTime() as stopwatch:
@@ -283,45 +305,75 @@ class PictureWindow(QtWidgets.QMainWindow):
         if len(paths) == 0:
             return
         elif len(paths) == 1:
-            self.paths = self._get_pic_paths(paths[0].parent)
-            self.path_idx = self.paths.index(paths[0])
+            p = paths[0]
+            if p.is_file():
+                self.paths = self._get_pic_paths(p.parent)
+                self.path_idx = self.paths.index(p)
+            elif p.is_dir():
+                self.paths = self._get_pic_paths(p)
+                self.path_idx = 0
+            else:
+                assert False, f"{p} is not file or directory"
         else:
             self.paths = paths
             self.path_idx = 0
 
-        path = self.paths[self.path_idx]
-        self.cache.put(path)
-        self.try_preload(self.path_idx + 1)
-        self.try_preload(self.path_idx - 1)
-        self.cache.load(path)
+        if self.paths:
+            path = self.paths[self.path_idx]
+            self.cache.put(path)
+            self.try_preload(self.path_idx + 1)
+            self.try_preload(self.path_idx - 1)
+            self.cache.load(path)
+        else:
+            self._view_clear()
 
     def load_next(self):
         if self.path_idx < len(self.paths) - 1:
             self.path_idx += 1
             self.try_preload(self.path_idx + 1)
             self.cache.load(self.paths[self.path_idx])
+            self.last_action = "next"
 
     def load_prev(self):
         if self.path_idx > 0:
             self.path_idx -= 1
             self.try_preload(self.path_idx - 1)
             self.cache.load(self.paths[self.path_idx])
+            self.last_action = "prev"
 
     def load_first(self):
         if self.path_idx != 0:
             self.path_idx = 0
             self.try_preload(self.path_idx + 1)
             self.cache.load(self.paths[self.path_idx])
+            self.last_action = "first"
 
     def load_last(self):
         if self.path_idx != len(self.paths) - 1:
             self.path_idx = len(self.paths) - 1
             self.try_preload(self.path_idx - 1)
             self.cache.load(self.paths[self.path_idx])
+            self.last_action = "last"
 
     def set_fit_to_window(self, checked: bool) -> None:
         self.button_fit_to_window.setChecked(checked)
         self.viewer.fit_to_window = checked
+
+    def _load_after_delete(self, idx: int) -> None:
+        first_idx = 0
+        last_idx = len(self.paths) - 1
+
+        if self.last_action in ("none", "next", "last"):
+            self.path_idx = min(idx, last_idx)
+        elif self.last_action in ("prev", "first"):
+            self.path_idx = max(first_idx, idx - 1)
+        else:
+            assert False, f"Unhandled last action: {self.last_action}"
+
+        if self.paths:
+            self.cache.load(self.paths[self.path_idx])
+        else:
+            self._view_clear()
 
     def delete_current(self) -> None:
         assert self.loaded is not None
@@ -333,20 +385,24 @@ class PictureWindow(QtWidgets.QMainWindow):
             if ret == QtWidgets.QMessageBox.StandardButton.Yes:
                 target_dir = path.parent / self.deleted_subdir
                 target = target_dir / path.name
-                target_dir.mkdir(parents=False, exist_ok=True)
                 if target.exists():
                     QtWidgets.QMessageBox.warning(
                         self, "Cannot delete file", f"<{path}> could not be deleted because <{target}> already exists."
                     )
                 else:
-                    path.rename(target)
+                    target_dir.mkdir(parents=False, exist_ok=True)
+                    try:
+                        path.rename(target)
+                    except FileNotFoundError:
+                        QtWidgets.QMessageBox.warning(
+                            self,
+                            "Cannot delete file",
+                            f"<{path}> could not be deleted because it only existed in cache.",
+                        )
+
                     del_path = self.paths.pop(idx)
                     assert del_path == path
-                    if idx == 0:
-                        self.path_idx = 0
-                    else:
-                        self.path_idx = idx - 1
-                    self.cache.load(self.paths[self.path_idx])
+                    self._load_after_delete(idx)
             elif ret == QtWidgets.QMessageBox.StandardButton.No:
                 pass
             else:
@@ -397,16 +453,21 @@ class PictureWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(Path, Exception)
     def on_pic_load_failed(self, path: Path, e: Exception):
-        idx = self.paths.index(path) + 1
-        self.statusbar_number.setText(f"{idx}/{len(self.paths)}")
-        self.statusbar_filename.setText(None)
-        self.statusbar_make.setText(None)
-        self.statusbar_model.setText(None)
-        self.statusbar_info.setText(None)
-        self.viewer.clear()
-        QtWidgets.QMessageBox.warning(
-            self, "Loading picture failed", f"Loading <{path}> failed. {type(e).__name__}: {e}"
-        )
+        idx = self.paths.index(path)
+        if isinstance(e, FileNotFoundError):
+            del_path = self.paths.pop(idx)
+            assert del_path == path
+            self._load_after_delete(idx)
+        else:
+            self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
+            self.statusbar_filename.setText(None)
+            self.statusbar_make.setText(None)
+            self.statusbar_model.setText(None)
+            self.statusbar_info.setText(None)
+            self.viewer.clear()
+            QtWidgets.QMessageBox.warning(
+                self, "Loading picture failed", f"Loading <{path}> failed. {type(e).__name__}: {e}"
+            )
 
     @QtCore.Slot()
     def on_file_open(self):
@@ -470,13 +531,14 @@ class PictureWindow(QtWidgets.QMainWindow):
 
 
 class PyServer(QtCore.QThread):
+    name: str
     message_received = QtCore.Signal(dict)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.name = r"\\.\pipe\asd-lol"
+        self.name = rf"\\.\pipe\{APP_AUTHOR}-{APP_NAME}"
 
-    def prepare(self, msg: Optional[dict]):
+    def prepare(self, msg: Optional[dict]) -> None:
         if os.path.exists(self.name):
             with Client(self.name, "AF_PIPE") as conn:
                 conn.send(msg)
@@ -484,7 +546,7 @@ class PyServer(QtCore.QThread):
         else:
             self.start()
 
-    def run(self):
+    def run(self) -> None:
         with Listener(self.name, "AF_PIPE") as listener:
             while True:
                 with listener.accept() as conn:
@@ -503,7 +565,7 @@ class PyServer(QtCore.QThread):
 
                     self.message_received.emit(msg)
 
-    def stop(self):
+    def stop(self) -> None:
         with Client(self.name, "AF_PIPE") as conn:
             conn.send(None)
 
@@ -511,16 +573,16 @@ class PyServer(QtCore.QThread):
 if __name__ == "__main__":
     from argparse import ArgumentParser
 
-    from genutility.args import is_file
+    from genutility.args import existing_path
 
     parser = ArgumentParser()
-    parser.add_argument("paths", metavar="PATH", type=is_file, nargs="*", help="Open image file")
+    parser.add_argument("paths", metavar="PATH", type=existing_path, nargs="*", help="Open image file")
     parser.add_argument("--mode", choices=("fit", "original"), default="fit")
     parser.add_argument("--resolve-city-names", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    log_fmt = "%(levelname)s:%(name)s:%(funcName)s:%(message)s"
+    log_fmt = "%(asctime)s %(levelname)s:%(name)s:%(funcName)s:%(message)s"
 
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG, format=log_fmt)
