@@ -1,10 +1,12 @@
 import re
+import threading
 from datetime import datetime, timedelta, tzinfo
 from functools import total_ordering
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar
+from queue import Queue
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar, Union
 
 import networkx as nx
 import numpy as np
@@ -271,3 +273,65 @@ def make_groups(dups: np.ndarray) -> Iterator[Set[int]]:
     G = nx.Graph()
     G.add_edges_from(dups)
     return nx.connected_components(G)
+
+
+class ThreadedIterator(Iterator[T]):
+    queue: "Queue[Tuple[bool, Union[T, None, Exception]]]"
+    exhausted: bool
+
+    def __init__(self, it: Iterable[T], maxsize: int) -> None:
+        self.it = it
+        self.queue = Queue(maxsize)
+        self.thread = threading.Thread(target=self.worker, daemon=True)
+        self.thread.start()
+        self.exhausted = False
+
+    def worker(self) -> None:
+        try:
+            for item in self.it:
+                self.queue.put((True, item))
+            self.queue.put((False, None))
+        except Exception as e:
+            self.queue.put((False, e))
+
+    def __next__(self) -> T:
+        if self.exhausted:
+            raise StopIteration
+
+        b, item = self.queue.get()
+        if not b:
+            self.thread.join()
+            if item is None:
+                self.exhausted = True
+                raise StopIteration
+            else:
+                assert isinstance(item, Exception)
+                raise item
+
+        return item
+
+    def __iter__(self) -> "ThreadedIterator":
+        return self
+
+
+def slice_idx(total: int, batchsize: int) -> Iterator[Tuple[int, int]]:
+    for s in range(0, total, batchsize):
+        e = min(batchsize, total - s)
+        yield s, e
+
+
+class CollectingIterable(Iterable[T]):
+    collection: List[T]
+    exhausted: bool
+
+    def __init__(self, it: Iterable[T]):
+        self.it = it
+        self.collection = []
+        self.exhausted = False
+
+    def __iter__(self) -> Iterator[T]:
+        self.collection = []
+        for item in self.it:
+            self.collection.append(item)
+            yield item
+        self.exhausted = True
