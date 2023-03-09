@@ -14,7 +14,7 @@ from genutility.time import MeasureTime
 from natsort import os_sorted
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from shared_gui import PixmapViewer, QImageWithBuffer, read_qt_image
+from picturetool.shared_gui import PixmapViewer, QImageWithBuffer, read_qt_image
 
 APP_AUTHOR = "Dobatymo"
 APP_NAME = "picture-viewer"
