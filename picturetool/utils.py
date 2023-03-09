@@ -58,6 +58,18 @@ def hamming_duplicates_chunk(
     return np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
 
 
+def l2_duplicates_chunk(a_arr: np.ndarray, b_arr: np.ndarray, threshold: float) -> np.ndarray:
+    diff = a_arr - b_arr
+    dists = np.sqrt(np.sum(diff * diff, axis=-1))
+    return np.argwhere(np.triu(dists <= threshold, 1))
+
+
+def l2squared_duplicates_chunk(a_arr: np.ndarray, b_arr: np.ndarray, threshold: float) -> np.ndarray:
+    diff = a_arr - b_arr
+    dists = np.sum(diff * diff, axis=-1)
+    return np.argwhere(np.triu(dists <= threshold, 1))
+
+
 @total_ordering
 class MaxType:
     def __le__(self, other):

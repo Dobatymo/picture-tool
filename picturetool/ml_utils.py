@@ -1,9 +1,42 @@
-from typing import Iterator, Tuple, Union, overload
+from enum import Enum
+from typing import Iterable, Iterator, Tuple, Union, overload
 
 import faiss
+import numpy as np
+from annoy import AnnoyIndex
 from tqdm import tqdm
 
 from .utils import slice_idx
+
+
+class FaissMetric(Enum):
+    INNER_PRODUCT = 0
+    L2 = 1
+    L1 = 2
+    Linf = 3
+    Lp = 4
+    Canberra = 5
+    BrayCurtis = 6
+    JensenShannon = 7
+    Jaccard = 8
+
+
+def faiss_from_array(arr: np.ndarray, norm: str) -> Union[faiss.IndexFlatL2, faiss.IndexBinaryFlat]:
+    if len(arr.shape) != 2 or arr.dtype != np.float32:
+        raise ValueError("arr must be a 2-dim float32 array")
+
+    if norm == "l2-squared":
+        index = faiss.IndexFlatL2(arr.shape[1])
+        assert FaissMetric(index.metric_type).name == "L2"
+        index.add(arr)
+    elif norm == "hamming":
+        index = faiss.IndexBinaryFlat(arr.shape[1] * 8)
+        print("metric", index.metric_type)
+        index.add(arr)
+    else:
+        raise ValueError(f"Invalid norm: {norm}")
+
+    return index
 
 
 def faiss_duplicates_top_k(
@@ -62,7 +95,39 @@ def faiss_duplicates_threshold(index, batchsize, threshold, verbose=False):
                 q_indices = indices[lims[i] : lims[i + 1]]
                 q_distances = distances[lims[i] : lims[i + 1]]
                 for idx, dist in zip(q_indices, q_distances):
-                    if idx != q_idx:
+                    if idx < q_idx:
                         yield idx, q_idx, dist
 
             pbar.update(ni)
+
+
+def faiss_to_pairs(it: Iterable[Tuple[int, int, float]]) -> Tuple[np.ndarray, np.ndarray]:
+    pairs = []
+    dists = []
+    for a, b, dist in it:
+        pairs.append((a, b))
+        dists.append(dist)
+    return np.array(pairs), np.array(dists)
+
+
+def annoy_from_array(arr: np.ndarray, norm: str, n_trees: int = 100) -> AnnoyIndex:
+    if norm == "euclidean":
+        index = AnnoyIndex(arr.shape[1], norm)
+    elif norm == "hamming":
+        index = AnnoyIndex(arr.shape[1] * 8, norm)
+    else:
+        raise ValueError(f"Invalid norm: {norm}")
+
+    for i in range(arr.shape[0]):
+        index.add_item(i, arr[i])
+    index.build(n_trees)
+
+    return index
+
+
+def annoy_duplicates_top_k(index: AnnoyIndex, top_k: int, verbose: bool = False) -> np.ndarray:
+    out = []
+    for i in tqdm(range(index.get_n_items()), disable=not verbose):
+        items, distances = index.get_nns_by_item(i, top_k, include_distances=True)
+        out.append(items)
+    return np.array(out)
