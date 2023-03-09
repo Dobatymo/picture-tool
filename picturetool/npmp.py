@@ -12,7 +12,7 @@ Shape = Tuple[int, ...]
 Indices = Tuple[slice, ...]
 T = TypeVar("T")
 
-THREADPOOL_LIMIT = None
+THREADPOOL_LIMIT: Optional[int] = None
 
 
 def prod(shape):
@@ -77,7 +77,7 @@ def chunked_parallel_task_mt(
     if coords is None:
         return func(a_arr[a_idx], b_arr[b_idx], **kwargs)
     else:
-        return func(a_arr[a_idx], b_arr[b_idx], coords, **kwargs)
+        return func(a_arr[a_idx], b_arr[b_idx], coords=coords, **kwargs)
 
 
 def chunked_parallel_task_mp(
@@ -95,7 +95,7 @@ def chunked_parallel_task_mp(
     if coords is None:
         return func(a[a_idx], b[b_idx], **kwargs)
     else:
-        return func(a[a_idx], b[b_idx], coords, **kwargs)
+        return func(a[a_idx], b[b_idx], coords=coords, **kwargs)
 
 
 def _1d_iter(outshape: Shape, chunkshape: Shape) -> Iterator[Tuple[int]]:

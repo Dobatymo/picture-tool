@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Iterable, Iterator, Tuple, Union, overload
+from typing import Iterable, Iterator, List, Tuple, Union, overload
 
 import faiss
 import numpy as np
@@ -66,14 +66,14 @@ def faiss_duplicates_top_k(
 
 @overload
 def faiss_duplicates_threshold(
-    index: faiss.IndexFlat, batchsize: int, threshold: float, verbose: bool
+    index: faiss.IndexFlat, batchsize: int, threshold: float, verbose: bool = ...
 ) -> Iterator[Tuple[int, int, float]]:
     ...
 
 
 @overload
 def faiss_duplicates_threshold(
-    index: faiss.IndexBinary, batchsize: int, threshold: int, verbose: bool
+    index: faiss.IndexBinary, batchsize: int, threshold: int, verbose: bool = ...
 ) -> Iterator[Tuple[int, int, float]]:
     ...
 
@@ -102,12 +102,17 @@ def faiss_duplicates_threshold(index, batchsize, threshold, verbose=False):
 
 
 def faiss_to_pairs(it: Iterable[Tuple[int, int, float]]) -> Tuple[np.ndarray, np.ndarray]:
-    pairs = []
-    dists = []
+    pairs: List[List[int]] = []
+    dists: List[float] = []
+
     for a, b, dist in it:
-        pairs.append((a, b))
+        pairs.append([a, b])
         dists.append(dist)
-    return np.array(pairs), np.array(dists)
+
+    if pairs:
+        return np.array(pairs), np.array(dists)
+    else:
+        return np.empty(shape=(0, 2), dtype=np.int64), np.empty(shape=(0,), dtype=np.float32)
 
 
 def annoy_from_array(arr: np.ndarray, norm: str, n_trees: int = 100) -> AnnoyIndex:

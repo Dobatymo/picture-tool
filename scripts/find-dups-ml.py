@@ -63,7 +63,7 @@ def find_dups_ml(
     paths = CollectingIterable(path.rglob("*.jpg"))
 
     threshold = 1.0
-    num_threads = os.cpu_count() - 1
+    num_threads = (os.cpu_count() or 2) - 1
     torch.set_num_threads(num_threads)
     torch.set_num_interop_threads(1)
     logging.info("Using %i intra-op and %i inter-op threads", torch.get_num_threads(), torch.get_num_interop_threads())
