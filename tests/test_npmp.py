@@ -1,7 +1,5 @@
-from unittest import TestCase
-
 import numpy as np
-from genutility.test import parametrize
+from genutility.test import MyTestCase, parametrize
 
 from picturetool.npmp import ChunkedParallel, SharedNdarray
 
@@ -10,7 +8,7 @@ def sum_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.sum(a + b, axis=-1)
 
 
-class NpmpTest(TestCase):
+class NpmpTest(MyTestCase):
     @classmethod
     def setUpClass(cls):
         seed = 0

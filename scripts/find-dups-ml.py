@@ -20,7 +20,7 @@ from transformers.image_utils import ImageFeatureExtractionMixin
 from transformers.models.vit.feature_extraction_vit import ViTFeatureExtractor
 from transformers.models.vit.modeling_vit import ViTModel
 
-from picturetool.ml_utils import faiss_duplicates_threshold
+from picturetool.ml_utils import faiss_duplicates_threshold, faiss_to_pairs
 from picturetool.utils import CollectingIterable, ThreadedIterator
 
 DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
@@ -62,6 +62,7 @@ def find_dups_ml(
 ) -> Tuple[List[Path], np.ndarray]:
     paths = CollectingIterable(path.rglob("*.jpg"))
 
+    threshold = 1.0
     num_threads = os.cpu_count() - 1
     torch.set_num_threads(num_threads)
     torch.set_num_interop_threads(1)
@@ -82,9 +83,9 @@ def find_dups_ml(
 
     assert paths.exhausted
 
-    pairs_threshold = np.array([(a, b) for a, b, dist in faiss_duplicates_threshold(index)])
+    pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, 1000, threshold))
 
-    return paths.collection, pairs_threshold
+    return paths.collection, pairs
 
 
 def main():

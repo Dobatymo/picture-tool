@@ -1,25 +1,23 @@
 import sys
-from enum import Enum
 from typing import Optional, Tuple
 
 import dask.array as da
-import faiss
 import numpy as np
-from annoy import AnnoyIndex
 from dask.diagnostics import ProgressBar
 from genutility.iter import progress
 from genutility.time import PrintStatementTime
 from genutility.typing import SizedIterable
-from tqdm import tqdm
 
 from picturetool import npmp
-from picturetool.ml_utils import faiss_duplicates_threshold, faiss_duplicates_top_k
-from picturetool.utils import hamming_duplicates_chunk
-
-
-def l2_dups_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    m = np.sqrt(np.sum(np.power(a - b, 2), axis=-1))
-    return np.argwhere(m < 1.0)
+from picturetool.ml_utils import (
+    annoy_duplicates_top_k,
+    annoy_from_array,
+    faiss_duplicates_threshold,
+    faiss_duplicates_top_k,
+    faiss_from_array,
+    faiss_to_pairs,
+)
+from picturetool.utils import hamming_duplicates_chunk, l2_duplicates_chunk
 
 
 def matmul_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -31,7 +29,7 @@ def matmul_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 funcs = {
-    "l2-dups": l2_dups_chunk,
+    "l2-dups": l2_duplicates_chunk,
     "binary-dups": hamming_duplicates_chunk,
     "matmul": matmul_chunk,
 }
@@ -42,43 +40,23 @@ funcs_kwargs = {
 }
 
 
-class FaissMetric(Enum):
-    INNER_PRODUCT = 0
-    L2 = 1
-    L1 = 2
-    Linf = 3
-    Lp = 4
-    Canberra = 5
-    BrayCurtis = 6
-    JensenShannon = 7
-    Jaccard = 8
-
-
 def task_faiss(task: str, arr: np.ndarray, chunksize: int) -> np.ndarray:
     if task == "l2-dups":
-        index = faiss.IndexFlatL2(arr.shape[1])
-        assert FaissMetric(index.metric_type).name == "L2"
-        index.add(arr)
-        out = []
-        for a, b, c in faiss_duplicates_threshold(index, batchsize=chunksize, threshold=1.0, verbose=True):
-            out.append([a, b])
-        return np.array(out)
+        index = faiss_from_array(arr, "l2-squared")
+        pairs, dists = faiss_to_pairs(
+            faiss_duplicates_threshold(index, batchsize=chunksize, threshold=1.0, verbose=True)
+        )
+        return pairs
     elif task == "l2-top-k":
-        index = faiss.IndexFlatL2(arr.shape[1])
-        assert FaissMetric(index.metric_type).name == "L2"
-        index.add(arr)
-        out = []
-        for a, b, c in faiss_duplicates_top_k(index, batchsize=1000, top_k=5, verbose=True):
-            out.append([a, b])
-        return np.array(out)
+        index = faiss_from_array(arr, "l2-squared")
+        pairs, dists = faiss_to_pairs(faiss_duplicates_top_k(index, batchsize=1000, top_k=5, verbose=True))
+        return pairs
     elif task == "binary-dups":
-        index = faiss.IndexBinaryFlat(arr.shape[1] * 8)
-        print("metric", index.metric_type)
-        index.add(arr)
-        out = []
-        for a, b, c in faiss_duplicates_threshold(index, batchsize=chunksize, threshold=1.0, verbose=True):
-            out.append([a, b])
-        return np.array(out)
+        index = faiss_from_array(arr, "hamming")
+        pairs, dists = faiss_to_pairs(
+            faiss_duplicates_threshold(index, batchsize=chunksize, threshold=1.0, verbose=True)
+        )
+        return pairs
     else:
         raise ValueError(f"Invalid task: {task}")
 
@@ -86,29 +64,12 @@ def task_faiss(task: str, arr: np.ndarray, chunksize: int) -> np.ndarray:
 def task_annoy(task: str, arr: np.ndarray) -> np.ndarray:
     top_k = 5
     if task == "l2-dups":
-        index = AnnoyIndex(arr.shape[1], "euclidean")
-        for i in range(arr.shape[0]):
-            index.add_item(i, arr[i])
-        index.build(n_trees=100)
-
-        out = []
-        for i in tqdm(range(arr.shape[0])):
-            items, distances = index.get_nns_by_item(i, top_k, include_distances=True)
-            out.append(items)
-        return np.array(out)
+        index = annoy_from_array(arr, "euclidean")
+        return annoy_duplicates_top_k(index, top_k)
 
     elif task == "binary-dups":
-        index = AnnoyIndex(arr.shape[1] * 8, "hamming")
-        for i in range(arr.shape[0]):
-            index.add_item(i, arr[i])
-        index.build(n_trees=100)
-
-        out = []
-        for i in tqdm(range(arr.shape[0])):
-            items, distances = index.get_nns_by_item(i, top_k, include_distances=True)
-            out.append(items)
-        return np.array(out)
-
+        index = annoy_from_array(arr, "hamming")
+        return annoy_duplicates_top_k(index, top_k)
     else:
         raise ValueError(f"Invalid task: {task}")
 

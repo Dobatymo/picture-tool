@@ -1,5 +1,4 @@
 import math
-import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,6 +9,8 @@ from genutility.test import MyTestCase, parametrize
 from picturetool.utils import (
     Max,
     hamming_duplicates_chunk,
+    l2_duplicates_chunk,
+    l2squared_duplicates_chunk,
     make_datetime,
     make_groups,
     pd_sort_groups_by_first_row,
@@ -253,6 +254,36 @@ class TestUtils(MyTestCase):
         result = hamming_duplicates_chunk(a, b, (0, 0), -1, 2)
         np.testing.assert_array_equal(truth, result)
 
+        truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
+        result = hamming_duplicates_chunk(a, b, (0, 0), -1, 1)
+        np.testing.assert_array_equal(truth, result)
+
+    def test_l2_duplicates_chunk(self):
+        arr = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+        a = arr[None, :, :]
+        b = arr[:, None, :]
+
+        truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
+        result = l2_duplicates_chunk(a, b, 2)
+        np.testing.assert_array_equal(truth, result)
+
+        truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
+        result = l2_duplicates_chunk(a, b, 1)
+        np.testing.assert_array_equal(truth, result)
+
+    def test_l2squared_duplicates_chunk(self):
+        arr = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+        a = arr[None, :, :]
+        b = arr[:, None, :]
+
+        truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
+        result = l2squared_duplicates_chunk(a, b, 2.1)
+        np.testing.assert_array_equal(truth, result)
+
+        truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
+        result = l2squared_duplicates_chunk(a, b, 1.1)
+        np.testing.assert_array_equal(truth, result)
+
     def test_to_datetime(self):
         s_aware1 = "2000-01-01T00:00:00.000000+04:00"
         s_aware2 = "2000-01-01T00:00:00.000001+00:00"
@@ -281,4 +312,6 @@ class TestUtils(MyTestCase):
 
 
 if __name__ == "__main__":
+    import unittest
+
     unittest.main()
