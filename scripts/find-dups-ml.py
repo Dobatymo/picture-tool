@@ -1,6 +1,7 @@
 # %pip install numpy torch transformers faiss-cpu pillow tqdm
 import csv
 import logging
+import os
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import Iterable, Iterator, List, Tuple
@@ -19,7 +20,8 @@ from transformers.image_utils import ImageFeatureExtractionMixin
 from transformers.models.vit.feature_extraction_vit import ViTFeatureExtractor
 from transformers.models.vit.modeling_vit import ViTModel
 
-from utils import CollectingIterable, ThreadedIterator, slice_idx
+from picturetool.ml_utils import faiss_duplicates_threshold
+from picturetool.utils import CollectingIterable, ThreadedIterator
 
 DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
 
@@ -27,7 +29,7 @@ DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
 def load_images(paths: Iterable[Path]) -> Iterator[torch.Tensor]:
     for path in paths:
         try:
-            with Image.open(path) as img:
+            with Image.open(path, "r") as img:
                 if img.mode in ("L",):
                     logging.debug("Unsupported image mode for %s: %s", path, img.mode)
                     continue
@@ -45,51 +47,14 @@ def extract_embeddings(
     assert isinstance(images, list)
     assert isinstance(images[0], torch.Tensor)
 
-    image_pp: transformers.BatchFeature = extractor(images, return_tensors="pt")
-    assert image_pp["pixel_values"].shape[1:] == (3, 224, 224)
+    with torch.inference_mode():
+        image_pp: transformers.BatchFeature = extractor(images, return_tensors="pt")
+        assert image_pp["pixel_values"].shape[1:] == (3, 224, 224)
 
-    features = model(**image_pp).last_hidden_state[:, 0].detach().numpy()
-    assert features.shape[1:] == (768,)
+        features = model(**image_pp).last_hidden_state[:, 0].detach().numpy()
+        assert features.shape[1:] == (768,)
 
     return features
-
-
-def get_similar_top_k(
-    index: faiss.IndexFlat, batchsize: int = 1000, top_k: int = 5, verbose: bool = False
-) -> Iterator[Tuple[int, int, float]]:
-    with tqdm(total=index.ntotal, disable=not verbose) as pbar:
-        for i0, ni in slice_idx(index.ntotal, batchsize):
-            query = index.reconstruct_n(i0, ni)
-            distances, indices = index.search(query, top_k)
-
-            rindices = range(i0, i0 + ni)
-            for q_indices, q_idx, q_distances in zip(indices, rindices, distances):
-                for idx, dist in zip(q_indices, q_distances):
-                    if idx == -1:
-                        break
-                    if idx != q_idx:
-                        yield idx, q_idx, dist
-
-            pbar.update(ni)
-
-
-def get_similar_treshold(
-    index, batchsize: int = 1000, threshold: float = 1.0, verbose: bool = False
-) -> Iterator[Tuple[int, int, float]]:
-    with tqdm(total=index.ntotal, disable=not verbose) as pbar:
-        for i0, ni in slice_idx(index.ntotal, batchsize):
-            query = index.reconstruct_n(i0, ni)
-
-            lims, distances, indices = index.range_search(query, threshold)
-            for i in range(ni):
-                q_idx = i0 + i
-                q_indices = indices[lims[i] : lims[i + 1]]
-                q_distances = distances[lims[i] : lims[i + 1]]
-                for idx, dist in zip(q_indices, q_distances):
-                    if idx != q_idx:
-                        yield idx, q_idx, dist
-
-            pbar.update(ni)
 
 
 def find_dups_ml(
@@ -97,8 +62,14 @@ def find_dups_ml(
 ) -> Tuple[List[Path], np.ndarray]:
     paths = CollectingIterable(path.rglob("*.jpg"))
 
+    num_threads = os.cpu_count() - 1
+    torch.set_num_threads(num_threads)
+    torch.set_num_interop_threads(1)
+    logging.info("Using %i intra-op and %i inter-op threads", torch.get_num_threads(), torch.get_num_interop_threads())
+
     extractor: ViTFeatureExtractor = transformers.AutoFeatureExtractor.from_pretrained(vit_model)
     model: ViTModel = transformers.AutoModel.from_pretrained(vit_model)
+    model.eval()
 
     hidden_dim = model.config.hidden_size
 
@@ -111,11 +82,7 @@ def find_dups_ml(
 
     assert paths.exhausted
 
-    pairs_threshold = np.array([(a, b) for a, b, dist in get_similar_treshold(index)])
-
-    # print('top-k')
-    # pairs_top_k = np.array([(a, b) for a, b, dist in get_similar_top_k(index)])
-    # print(pairs_top_k)
+    pairs_threshold = np.array([(a, b) for a, b, dist in faiss_duplicates_threshold(index)])
 
     return paths.collection, pairs_threshold
 
@@ -148,7 +115,7 @@ def main():
 
     with StdoutFile(args.out, "wt", newline="") as fw:
         writer = csv.writer(fw)
-        writer.writerow(["a", "b"])
+        writer.writerow(["path-a", "path-b"])
         for a, b in pairs:
             writer.writerow([paths[a], paths[b]])
 

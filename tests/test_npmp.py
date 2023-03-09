@@ -3,7 +3,7 @@ from unittest import TestCase
 import numpy as np
 from genutility.test import parametrize
 
-from npmp import ChunkedParallel, SharedNdarray
+from picturetool.npmp import ChunkedParallel, SharedNdarray
 
 
 def sum_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:

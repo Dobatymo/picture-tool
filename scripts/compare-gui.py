@@ -20,9 +20,9 @@ from genutility._files import to_dos_path
 from genutility.time import MeasureTime
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from prioritize import functions
-from shared_gui import PixmapViewer, read_qt_pixmap
-from utils import SortValuesKwArgs, pd_sort_groups_by_first_row, pd_sort_within_group, to_datetime
+from picturetool.prioritize import functions
+from picturetool.shared_gui import PixmapViewer, read_qt_pixmap
+from picturetool.utils import SortValuesKwArgs, pd_sort_groups_by_first_row, pd_sort_within_group, to_datetime
 
 APP_NAME = "compare-gui"
 PIC_CACHE_SIZE = 4

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from genutility.test import MyTestCase, parametrize
 
-from utils import (
+from picturetool.utils import (
     Max,
     hamming_duplicates_chunk,
     make_datetime,

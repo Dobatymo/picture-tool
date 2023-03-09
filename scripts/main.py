@@ -8,7 +8,7 @@ import piexif
 from genutility.pillow import NoActionNeeded, fix_orientation, write_text
 from PIL import Image
 
-from utils import get_exif_dates
+from picturetool.utils import get_exif_dates
 
 logger = logging.getLogger(__name__)
 

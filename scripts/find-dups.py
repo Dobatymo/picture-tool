@@ -43,8 +43,8 @@ from genutility.typing import CsvWriter, SizedIterable
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from PIL.IptcImagePlugin import getiptcinfo
 
-from npmp import ChunkedParallel, SharedNdarray
-from utils import (
+from picturetool.npmp import ChunkedParallel, SharedNdarray
+from picturetool.utils import (
     APP_NAME,
     APP_VERSION,
     DEFAULT_APPDATA_DIR,
@@ -111,7 +111,7 @@ class wrap:
         except ValueError as e:
             raise ImageError(path, e)
 
-        with Image.open(path) as img:
+        with Image.open(path, "r") as img:
             width, height = img.size
             exif = img.info.get("exif", None)
             icc_profile = img.info.get("icc_profile", None)

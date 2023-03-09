@@ -10,7 +10,7 @@ import piexif
 import pyexiv2
 from genutility.args import is_dir
 
-from utils import Max, get_exif_dates, with_stem
+from picturetool.utils import Max, get_exif_dates, with_stem
 
 modelmap = {
     b"iPhone SE (2nd generation)": "iPhone SE 2",
