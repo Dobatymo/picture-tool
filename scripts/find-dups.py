@@ -53,6 +53,7 @@ from picturetool.utils import (
     get_exif_dates,
     hamming_duplicates_chunk,
     make_groups,
+    npmp_to_pairs,
 )
 
 HEIF_EXTENSIONS = (".heic", ".heif")
@@ -465,14 +466,11 @@ def get_dupe_groups(
                 del hashes
 
                 chunkshape = (chunksize, chunksize)
-                dups = np.concatenate(
-                    list(
-                        progress(
-                            hamming_duplicates(sharr, chunkshape, hamming_threshold),
-                            extra_info_callback=lambda total, length: "Matching hashes",
-                        )
-                    )
+                it = progress(
+                    hamming_duplicates(sharr, chunkshape, hamming_threshold),
+                    extra_info_callback=lambda total, length: "Matching hashes",
                 )
+                dups = npmp_to_pairs(it)
                 del sharr
                 dupgroups = [[paths[idx] for idx in indices] for indices in make_groups(dups)]
                 del dups

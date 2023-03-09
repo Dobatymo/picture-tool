@@ -1,12 +1,16 @@
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Tuple
 
 import dask.array as da
 import numpy as np
 from dask.diagnostics import ProgressBar
+from genutility.file import StdoutFile
 from genutility.iter import progress
-from genutility.time import PrintStatementTime
+from genutility.time import MeasureTime
 from genutility.typing import SizedIterable
+from tqdm import tqdm
 
 from picturetool import npmp
 from picturetool.ml_utils import (
@@ -17,7 +21,7 @@ from picturetool.ml_utils import (
     faiss_from_array,
     faiss_to_pairs,
 )
-from picturetool.utils import hamming_duplicates_chunk, l2_duplicates_chunk
+from picturetool.utils import hamming_duplicates_chunk, l2squared_duplicates_chunk
 
 
 def matmul_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -29,15 +33,72 @@ def matmul_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 funcs = {
-    "l2-dups": l2_duplicates_chunk,
+    "l2-dups": l2squared_duplicates_chunk,
     "binary-dups": hamming_duplicates_chunk,
     "matmul": matmul_chunk,
 }
 funcs_kwargs = {
-    "l2-dups": {},
+    "l2-dups": {"threshold": 1.0},
     "binary-dups": {"hamming_threshold": 1},
     "matmul": {},
 }
+
+
+from numba import jit, optional
+from numba import types as t
+from numba_progress import ProgressBar as NumbaProgressBar  # pip install numba-progress
+from numba_progress.progress import progressbar_type
+
+
+@jit(
+    [
+        t.int64[:, ::1](t.float32[:, ::1], t.float32, optional(progressbar_type)),
+        t.int64[:, ::1](t.float32[:, ::], t.float32, optional(progressbar_type)),
+    ],
+    nopython=True,
+    nogil=True,
+    cache=True,
+    parallel=False,
+    fastmath=True,
+)
+def l2squared_duplicates_numba(arr: np.ndarray, threshold: float, progress: Optional[NumbaProgressBar]) -> np.ndarray:
+    coords = []
+    for i in range(arr.shape[0]):
+        for j in range(i + 1, arr.shape[0]):
+            diffs = arr[i] - arr[j]
+            norm = np.sum(diffs * diffs)
+            if norm <= threshold:
+                coords.append([i, j])
+        if progress is not None:
+            progress.update(1)
+    return np.array(coords)
+
+
+def task_numba(task: str, arr: np.ndarray, progress: Optional[NumbaProgressBar] = None) -> Optional[np.ndarray]:
+    threshold = 1.0
+
+    if task == "l2-dups":
+        return l2squared_duplicates_numba(arr, threshold, progress)
+    else:
+        raise ValueError(f"Invalid task: {task}")
+
+
+def task_python(task: str, arr: np.ndarray) -> np.ndarray:
+    threshold = 1.0
+
+    arr = arr.tolist()
+
+    if task == "l2-dups":
+        coords = []
+        for i in tqdm(range(len(arr))):
+            for j in range(i + 1, len(arr)):
+                diffs = [a - b for a, b in zip(arr[i], arr[j])]
+                norm = sum(i * i for i in diffs)
+                if norm <= threshold:
+                    coords.append([i, j])
+        return np.array(coords)
+    else:
+        raise ValueError(f"Invalid task: {task}")
 
 
 def task_faiss(task: str, arr: np.ndarray, chunksize: int) -> np.ndarray:
@@ -53,9 +114,7 @@ def task_faiss(task: str, arr: np.ndarray, chunksize: int) -> np.ndarray:
         return pairs
     elif task == "binary-dups":
         index = faiss_from_array(arr, "hamming")
-        pairs, dists = faiss_to_pairs(
-            faiss_duplicates_threshold(index, batchsize=chunksize, threshold=1.0, verbose=True)
-        )
+        pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, batchsize=chunksize, threshold=2, verbose=True))
         return pairs
     else:
         raise ValueError(f"Invalid task: {task}")
@@ -123,14 +182,20 @@ def task_dask(task: str, np_arr: np.ndarray, chunksize: int):
         b = da.broadcast_to(
             arr[:, None, :], (arr.shape[0], arr.shape[0], arr.shape[1]), chunks=(chunksize, chunksize, -1)
         )
-        m = da.sqrt(da.sum(da.power(a - b, 2), axis=-1))
+        m = da.sum(da.power(a - b, 2), axis=-1)
         return da.argwhere(m < 1.0).compute()
     else:
         raise ValueError(f"Invalid task: {task}")
 
 
 def main(
-    engine: str, task: str, dims: Tuple[int, int], chunksize: int, seed: Optional[int], limit: Optional[int]
+    outpath: Optional[Path],
+    engine: str,
+    task: str,
+    dims: Tuple[int, int],
+    chunksize: int,
+    seed: Optional[int],
+    limit: Optional[int],
 ) -> None:
     rng = np.random.default_rng(seed)
 
@@ -139,9 +204,17 @@ def main(
     else:
         np_arr = rng.uniform(0, 1, size=dims).astype(np.float32)
 
+    now = datetime.now().isoformat()
+    prefix = f"{now} {engine} {task} dims={dims} chunksize={chunksize} limit={limit}"
+
     try:
-        with PrintStatementTime():
-            if engine == "numpy":
+        with MeasureTime() as stopwatch:
+            if engine == "python":
+                out = task_python(task, np_arr)
+            elif engine == "numba":
+                with NumbaProgressBar(total=np_arr.shape[0]) as nb_progress:
+                    out = task_numba(task, np_arr, nb_progress)
+            elif engine == "numpy":
                 out = task_numpy(task, np_arr)
             elif engine == "npmt":
                 out = np.concatenate(list(progress(task_npmt(task, np_arr, chunksize, limit))))
@@ -158,11 +231,16 @@ def main(
                 out = task_annoy(task, np_arr)
             else:
                 raise ValueError(engine)
+
+            delta = stopwatch.get()
+
     except MemoryError as e:
-        print("MemoryError", e)
-        sys.exit(1)
+        with StdoutFile(outpath, "at") as fw:
+            fw.write(f"{prefix}: MemoryError {e}\n")
+            sys.exit(1)
     else:
-        print(engine, out.shape)
+        with StdoutFile(outpath, "at") as fw:
+            fw.write(f"{prefix}: {out.shape} in {delta}\n")
 
 
 if __name__ == "__main__":
@@ -171,12 +249,21 @@ if __name__ == "__main__":
     CHUNKSIZE = 1000
 
     parser = ArgumentParser()
-    parser.add_argument("--engine", choices=("numpy", "npmt", "npmp", "dask", "faiss", "annoy"), required=True)
+    parser.add_argument(
+        "--engine", choices=("python", "numba", "numpy", "npmt", "npmp", "dask", "faiss", "annoy"), required=True
+    )
     parser.add_argument("--dims", type=int, nargs=2, required=True)
     parser.add_argument("--chunksize", type=int, default=CHUNKSIZE)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--threadpool-limit", type=int, default=None)
     parser.add_argument("--task", choices=("l2-dups", "binary-dups"))
+    parser.add_argument(
+        "--out",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="Write results to file. Otherwise they are written to stdout.",
+    )
     args = parser.parse_args()
 
-    main(args.engine, args.task, args.dims, args.chunksize, args.seed, args.threadpool_limit)
+    main(args.out, args.engine, args.task, args.dims, args.chunksize, args.seed, args.threadpool_limit)

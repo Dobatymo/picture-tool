@@ -49,25 +49,48 @@ def with_stem(path: Path, stem: str) -> Path:
     return path.with_name(stem + path.suffix)
 
 
+TUPLE_WITH_ZERO = (0,)
+
+
+def unique_pairs(arr: np.ndarray) -> np.ndarray:
+    if arr.size == 0:
+        return arr
+
+    b = arr[:, 0] < arr[:, 1]
+    return arr[b]
+
+
+def array_from_iter(it: Iterable[np.ndarray]) -> np.ndarray:
+    return np.concatenate(list(it))
+
+
+def npmp_to_pairs(it: Iterable[np.ndarray]) -> np.ndarray:
+    return unique_pairs(array_from_iter(it))
+
+
 def hamming_duplicates_chunk(
-    a_arr: np.ndarray, b_arr: np.ndarray, coords: Tuple[int, ...], axis: int, hamming_threshold: int
+    a_arr: np.ndarray, b_arr: np.ndarray, axis: int, hamming_threshold: int, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
 ) -> np.ndarray:
     """Returns a list of coordinate pairs which are duplicates."""
 
     dists = hamming_dist_packed(a_arr, b_arr, axis)
-    return np.argwhere(np.triu(dists <= hamming_threshold, 1)) + np.array(coords)
+    return np.argwhere(dists <= hamming_threshold) + np.array(coords)
 
 
-def l2_duplicates_chunk(a_arr: np.ndarray, b_arr: np.ndarray, threshold: float) -> np.ndarray:
+def l2_duplicates_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, threshold: float, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
+) -> np.ndarray:
     diff = a_arr - b_arr
     dists = np.sqrt(np.sum(diff * diff, axis=-1))
-    return np.argwhere(np.triu(dists <= threshold, 1))
+    return np.argwhere(dists <= threshold) + np.array(coords)
 
 
-def l2squared_duplicates_chunk(a_arr: np.ndarray, b_arr: np.ndarray, threshold: float) -> np.ndarray:
+def l2squared_duplicates_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, threshold: float, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
+) -> np.ndarray:
     diff = a_arr - b_arr
     dists = np.sum(diff * diff, axis=-1)
-    return np.argwhere(np.triu(dists <= threshold, 1))
+    return np.argwhere(dists <= threshold) + np.array(coords)
 
 
 @total_ordering
@@ -327,9 +350,19 @@ class ThreadedIterator(Iterator[T]):
 
 
 def slice_idx(total: int, batchsize: int) -> Iterator[Tuple[int, int]]:
+    if batchsize < 1:
+        raise ValueError("batchsize must be >=1")
+
     for s in range(0, total, batchsize):
         e = min(batchsize, total - s)
         yield s, e
+
+
+def np_sorted(arr: np.ndarray) -> np.ndarray:
+    # fixme: is this faster than: `np.array(sorted(arr, key=lambda x: x.tolist()))`?
+    if arr.size == 0:
+        return arr
+    return arr[np.lexsort(arr.T[::-1])]
 
 
 class CollectingIterable(Iterable[T]):

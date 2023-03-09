@@ -7,7 +7,7 @@ from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import humanize
 from genutility.time import MeasureTime
@@ -68,12 +68,12 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
 
 
 class WindowManager:
-    def __init__(self):
-        self.windows = set()  # keep references to windows around
+    def __init__(self) -> None:
+        self.windows: Set[PictureWindow] = set()  # keep references to windows around
         self.tray: Optional[QSystemTrayIconWithMenu] = None
-        self.create_kwargs = {}
+        self.create_kwargs: Dict[str, Any] = {}
 
-    def set_create_args(self, **kwargs):
+    def set_create_args(self, **kwargs) -> None:
         self.create_kwargs = kwargs
 
     def make_tray(self, app: QtCore.QCoreApplication) -> None:

@@ -13,10 +13,13 @@ from picturetool.utils import (
     l2squared_duplicates_chunk,
     make_datetime,
     make_groups,
+    np_sorted,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
     pd_sort_within_group_slow,
+    slice_idx,
     to_datetime,
+    unique_pairs,
     with_stem,
 )
 
@@ -246,16 +249,43 @@ class TestUtils(MyTestCase):
         with self.assertRaises(ValueError):
             with_stem(path, stem)
 
+    @parametrize(
+        ([], []),
+        ([[0, 0], [0, 1], [1, 0], [1, 1]], [[0, 1]]),
+    )
+    def test_unique_pairs(self, arr, truth):
+        truth = np.array(truth)
+        result = unique_pairs(np.array(arr))
+        np.testing.assert_array_equal(truth, result)
+
     def test_hamming_duplicates_chunk(self):
         arr = np.packbits([[0, 0], [0, 1], [1, 0], [1, 1]], axis=-1, bitorder="little")
         a, b = np.broadcast_arrays(arr[None, :, :], arr[:, None, :])
 
         truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
-        result = hamming_duplicates_chunk(a, b, (0, 0), -1, 2)
+        result = unique_pairs(hamming_duplicates_chunk(a, b, -1, 2))
         np.testing.assert_array_equal(truth, result)
 
         truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
-        result = hamming_duplicates_chunk(a, b, (0, 0), -1, 1)
+        result = unique_pairs(hamming_duplicates_chunk(a, b, -1, 1))
+        np.testing.assert_array_equal(truth, result)
+
+    def test_l2_duplicates_chunk_empty(self):
+        arr = np.array([[]])
+        a = arr[None, :, :]
+        b = arr[:, None, :]
+
+        truth = np.empty(shape=(0, 2), dtype=np.int64)
+        result = unique_pairs(l2_duplicates_chunk(a, b, 2.1))
+        np.testing.assert_array_equal(truth, result)
+
+    def test_l2_duplicates_chunk_single(self):
+        arr = np.array([[1.0]])
+        a = arr[None, :, :]
+        b = arr[:, None, :]
+
+        truth = np.empty(shape=(0, 2), dtype=np.int64)
+        result = unique_pairs(l2_duplicates_chunk(a, b, 2.1))
         np.testing.assert_array_equal(truth, result)
 
     def test_l2_duplicates_chunk(self):
@@ -264,11 +294,11 @@ class TestUtils(MyTestCase):
         b = arr[:, None, :]
 
         truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
-        result = l2_duplicates_chunk(a, b, 2)
+        result = unique_pairs(l2_duplicates_chunk(a, b, 2.1))
         np.testing.assert_array_equal(truth, result)
 
         truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
-        result = l2_duplicates_chunk(a, b, 1)
+        result = unique_pairs(l2_duplicates_chunk(a, b, 1.1))
         np.testing.assert_array_equal(truth, result)
 
     def test_l2squared_duplicates_chunk(self):
@@ -277,11 +307,11 @@ class TestUtils(MyTestCase):
         b = arr[:, None, :]
 
         truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
-        result = l2squared_duplicates_chunk(a, b, 2.1)
+        result = unique_pairs(l2squared_duplicates_chunk(a, b, 2.1))
         np.testing.assert_array_equal(truth, result)
 
         truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
-        result = l2squared_duplicates_chunk(a, b, 1.1)
+        result = unique_pairs(l2squared_duplicates_chunk(a, b, 1.1))
         np.testing.assert_array_equal(truth, result)
 
     def test_to_datetime(self):
@@ -309,6 +339,32 @@ class TestUtils(MyTestCase):
         arr = np.array([[1, 2], [1, 3], [2, 3], [4, 5]])
         result = make_groups(arr)
         self.assertIterEqual(truth, result)
+
+    @parametrize(
+        (0, 1, []),
+        (1, 1, [(0, 1)]),
+        (1, 2, [(0, 1)]),
+        (2, 1, [(0, 1), (1, 1)]),
+        (2, 2, [(0, 2)]),
+        (3, 2, [(0, 2), (2, 1)]),
+    )
+    def test_slice_idx(self, total, batchsize, truth):
+        result = slice_idx(total, batchsize)
+        self.assertIterEqual(truth, result)
+
+    @parametrize(
+        ([], []),
+        ([[0, 0], [1, 0], [0, 1], [1, 1], [3, 2], [3, 1]], [[0, 0], [0, 1], [1, 0], [1, 1], [3, 1], [3, 2]]),
+    )
+    def test_np_sorted(self, arr, truth):
+        result = np_sorted(np.array(arr))
+        np.testing.assert_array_equal(result, np.array(truth))
+
+    def test_np_sorted_random(self):
+        arr = np.random.randint(0, 100, size=(100, 10))
+        result = np_sorted(arr)
+        truth = np.array(sorted(arr, key=lambda x: x.tolist()))
+        np.testing.assert_array_equal(result, truth)
 
 
 if __name__ == "__main__":
