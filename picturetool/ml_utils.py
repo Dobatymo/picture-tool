@@ -8,6 +8,8 @@ from tqdm import tqdm
 
 from .utils import slice_idx
 
+FaissIndexTypes = Union[faiss.IndexFlat, faiss.IndexBinary]
+
 
 class FaissMetric(Enum):
     INNER_PRODUCT = 0
@@ -21,17 +23,32 @@ class FaissMetric(Enum):
     Jaccard = 8
 
 
+def _reconstruct_fixed(index: FaissIndexTypes, i0: int, ni: int) -> np.ndarray:
+    """workaround for faiss bug https://github.com/facebookresearch/faiss/issues/2751"""
+
+    if isinstance(index, faiss.IndexBinary):
+        query = np.empty((ni, index.d), dtype=np.uint8)
+        index.reconstruct_n(i0, ni, faiss.swig_ptr(query))
+        return query[:, : index.d // 8]
+    else:
+        return index.reconstruct_n(i0, ni)  # fixme: a preallocated array could be used here
+
+
 def faiss_from_array(arr: np.ndarray, norm: str) -> Union[faiss.IndexFlatL2, faiss.IndexBinaryFlat]:
-    if len(arr.shape) != 2 or arr.dtype != np.float32:
-        raise ValueError("arr must be a 2-dim float32 array")
+    if len(arr.shape) != 2:
+        raise ValueError("arr must be a 2-dim array")
 
     if norm == "l2-squared":
+        if arr.dtype != np.float32:
+            raise ValueError("arr must be of dtype float32")
         index = faiss.IndexFlatL2(arr.shape[1])
         assert FaissMetric(index.metric_type).name == "L2"
         index.add(arr)
     elif norm == "hamming":
+        if arr.dtype != np.uint8:
+            raise ValueError("arr must be of dtype uint8")
         index = faiss.IndexBinaryFlat(arr.shape[1] * 8)
-        print("metric", index.metric_type)
+        assert index.metric_type == 1  # why?
         index.add(arr)
     else:
         raise ValueError(f"Invalid norm: {norm}")
@@ -40,7 +57,7 @@ def faiss_from_array(arr: np.ndarray, norm: str) -> Union[faiss.IndexFlatL2, fai
 
 
 def faiss_duplicates_top_k(
-    index: Union[faiss.IndexFlat, faiss.IndexBinary], batchsize: int, top_k: int, verbose: bool = False
+    index: FaissIndexTypes, batchsize: int, top_k: int, verbose: bool = False
 ) -> Iterator[Tuple[int, int, float]]:
     if batchsize < 1:
         raise ValueError("batchsize must be >= 1 (it's {batchsize})")
@@ -50,7 +67,8 @@ def faiss_duplicates_top_k(
 
     with tqdm(total=index.ntotal, disable=not verbose) as pbar:
         for i0, ni in slice_idx(index.ntotal, batchsize):
-            query = index.reconstruct_n(i0, ni)
+            query = _reconstruct_fixed(index, i0, ni)
+
             distances, indices = index.search(query, top_k)
 
             rindices = range(i0, i0 + ni)
@@ -87,7 +105,7 @@ def faiss_duplicates_threshold(index, batchsize, threshold, verbose=False):
 
     with tqdm(total=index.ntotal, disable=not verbose) as pbar:
         for i0, ni in slice_idx(index.ntotal, batchsize):
-            query = index.reconstruct_n(i0, ni)  # fixme: a preallocated array could be used here
+            query = _reconstruct_fixed(index, i0, ni)
 
             lims, distances, indices = index.range_search(query, threshold)
             for i in range(ni):
