@@ -6,6 +6,9 @@ profile = "black"
 src_paths = ["."]
 line_length = 120
 
+[tool.bandit]
+skips = ["B101"]
+
 [tool.poetry]
 name = "picture-tool"
 version = "0.1.0"
@@ -19,37 +22,37 @@ packages = [
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
 face-recognition = "1.3.0"
-genutility = {version = "^0.0.97", extras = ["filesdb", "numpy", "pickle", "pillow"]}
+genutility = {version = ">=0.0.97", extras = ["filesdb", "numpy", "pickle", "pillow"]}
 opencv-python = "4.5.4.60"
-pandas = "^1.5.0"
-pandasql = "^0.7.3"
-piexif = "^1.1.3"
-Pillow = "^9.2.0"
-pyexiv2 = "^2.7.1"
-filemeta = "^0.0.1"
-imagehash = "^4.3.1"
-appdirs = "^1.4.4"
-humanize = "^4.4.0"
-pillow-heif = "^0.7.0"
-msgpack = "^1.0.4"
-pyside2 = "^5.15.2.1"
-python-dateutil = "^2.8.2"
+pandas = ">=1.5.0"
+pandasql = ">=0.7.3"
+piexif = ">=1.1.3"
+Pillow = ">=9.2.0"
+pyexiv2 = ">=2.7.1"
+filemeta = ">=0.0.1"
+imagehash = ">=4.3.1"
+appdirs = ">=1.4.4"
+humanize = ">=4.4.0"
+pillow-heif = ">=0.7.0"
+msgpack = ">=1.0.4"
+pyside2 = ">=5.15.2.1"
+python-dateutil = ">=2.8.2"
 networkx = ">=3.0"
-natsort = "^8.2.0"
-reverse-geocoder = "^1.5.1"
-threadpoolctl = "^3.1.0"
-requests = {version = "^2.28.1", optional = true}
-pyarrow = {version = "^10.0.1", optional = true}
+natsort = ">=8.2.0"
+reverse-geocoder = ">=1.5.1"
+threadpoolctl = ">=3.1.0"
+requests = {version = ">=2.28.1", optional = true}
+pyarrow = {version = ">=10.0.1", optional = true}
 opencv-contrib-python = {version = "4.5.4.60", optional = true}
-image-quality = {version = "^1.2.7", optional = true}
+image-quality = {version = ">=1.2.7", optional = true}
 scikit-image = {version = "<0.19", optional = true}
-piq = {version = "^0.7.0", optional = true}
-torch = {version = "^1.13.1", optional = true}
-torchvision = {version = "^0.14.1", optional = true}
-torchaudio = {version = "^0.13.1", optional = true}
-kornia = {version = "^0.6.9", optional = true}
-transformers = {version = "^4.26.1", optional = true}
-faiss-cpu = {version = "^1.7.3", optional = true}
+piq = {version = ">=0.7.0", optional = true}
+torch = {version = ">=1.13.1", optional = true}
+torchvision = {version = ">=0.14.1", optional = true}
+torchaudio = {version = ">=0.13.1", optional = true}
+kornia = {version = ">=0.6.9", optional = true}
+transformers = {version = ">=4.26.1", optional = true}
+faiss-cpu = {version = ">=1.7.3", optional = true}
 
 [tool.poetry.extras]
 quality-ml = ["opencv-contrib-python", "image-quality", "scikit-image", "piq", "torchvision", "kornia"]

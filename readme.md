@@ -60,7 +60,7 @@ Show a list of all different camera models found with a count of how often they 
 
 Find all pictures taken with an iPhone XR and show the file paths.
 
-- `py statistics.py --sql "SELECT path, `0th Make`, `0th Model` FROM df WHERE `0th Model` LIKE '%canon eos%'" D:\`
+- ``py statistics.py --sql "SELECT path, `0th Make`, `0th Model` FROM df WHERE `0th Model` LIKE '%canon eos%'" D:\``
 
 Find all pictures taken by a Canon EOS camera using SQL query.
 
