@@ -299,3 +299,50 @@ class PixmapViewer(QtWidgets.QScrollArea):
             event.accept()
         else:
             event.ignore()
+
+
+class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
+    doubleclicked = QtCore.Signal()
+
+    def __init__(self, icon: QtGui.QIcon, menu: QtWidgets.QMenu, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        assert icon
+        super().__init__(icon, parent)
+        assert menu
+
+        self.menu = menu
+        self.setContextMenu(menu)
+
+        # self.menu.aboutToHide.connect(self.on_aboutToHide)
+        # self.menu.aboutToShow.connect(self.on_aboutToShow)
+        # self.menu.hovered.connect(self.on_hovered)
+        self.menu.triggered.connect(self.on_triggered)
+
+        self.activated.connect(self.on_activated)
+
+    @QtCore.Slot(QtWidgets.QSystemTrayIcon.ActivationReason)
+    def on_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        logging.debug("%s", self.menu)
+        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
+            self.menu.show()
+        elif reason == QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.doubleclicked.emit()
+
+    """
+    @QtCore.Slot()
+    def on_aboutToHide(self):
+        logging.debug("called")
+
+    @QtCore.Slot()
+    def on_aboutToShow(self):
+        logging.debug("called")
+    """
+
+    """
+    @QtCore.Slot(QtWidgets.QAction)
+    def on_hovered(self, action):
+        logging.debug("%s", action)
+    """
+
+    @QtCore.Slot(QtWidgets.QAction)
+    def on_triggered(self, action):
+        logging.debug("%s", action)

@@ -39,7 +39,7 @@ funcs = {
 }
 funcs_kwargs = {
     "l2-dups": {"threshold": 1.0},
-    "binary-dups": {"hamming_threshold": 1},
+    "binary-dups": {"axis": -1, "hamming_threshold": 1},
     "matmul": {},
 }
 
@@ -74,7 +74,7 @@ def l2squared_duplicates_numba(arr: np.ndarray, threshold: float, progress: Opti
     return np.array(coords)
 
 
-def task_numba(task: str, arr: np.ndarray, progress: Optional[NumbaProgressBar] = None) -> Optional[np.ndarray]:
+def task_numba(task: str, arr: np.ndarray, progress: Optional[NumbaProgressBar] = None) -> np.ndarray:
     threshold = 1.0
 
     if task == "l2-dups":

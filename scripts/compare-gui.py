@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import platform
-import subprocess
+import subprocess  # nosec
 import sys
 from collections import defaultdict
 from datetime import timedelta, timezone
@@ -54,18 +54,18 @@ def show_in_file_manager(path: str) -> None:
     if platform.system() == "Windows":
         path = to_dos_path(path)
         args = f'explorer /select,"{path}"'
-        subprocess.run(args)
+        subprocess.run(args)  # nosec
     else:
         raise RuntimeError("Önly windows implemented")
 
 
 def open_using_default_app(path: str) -> None:
     if platform.system() == "Windows":  # Windows
-        os.startfile(path)
+        os.startfile(path)  # nosec
     elif platform.system() == "Darwin":  # macOS
-        subprocess.call(["open", path])
+        subprocess.call(["open", path])  # nosec
     else:  # Linux variants
-        subprocess.call(["xdg-open", path])
+        subprocess.call(["xdg-open", path])  # nosec
 
 
 def slice_to_list(value: slice) -> list:

@@ -240,6 +240,7 @@ def notify(topic: str, message: str):
             "message": message,
             "title": APP_NAME,
         },
+        timeout=60,
     )
 
 
