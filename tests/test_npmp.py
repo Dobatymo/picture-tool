@@ -9,6 +9,43 @@ def sum_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.sum(a + b, axis=-1)
 
 
+class SharedNdarrayTest(MyTestCase):
+    @parametrize(
+        ((1,), np.uint8, 1, 1),
+        ((1,), np.uint64, 1, 8),
+        ((2, 3), np.uint8, 6, 6),
+        ((2, 3), np.uint64, 6, 48),
+    )
+    def test_create(self, shape, dtype, truth_size, truth_nbytes):
+        arr = SharedNdarray.create(shape, dtype)
+
+        self.assertEqual(arr.size, truth_size)
+        self.assertEqual(arr.nbytes, truth_nbytes)
+        self.assertGreaterEqual(arr.shm.size, truth_nbytes)
+
+    @parametrize(
+        ((1,), np.uint8, 1, 1),
+        ((1,), np.uint64, 1, 8),
+        ((2, 3), np.uint8, 6, 6),
+        ((2, 3), np.uint64, 6, 48),
+    )
+    def test_from_array(self, shape, dtype, truth_size, truth_nbytes):
+        arr = SharedNdarray.from_array(np.empty(shape, dtype))
+
+        self.assertEqual(arr.size, truth_size)
+        self.assertEqual(arr.nbytes, truth_nbytes)
+        self.assertGreaterEqual(arr.shm.size, truth_nbytes)
+
+    def test_str(self):
+        text = str(SharedNdarray.create((1,), "uint16"))
+        regex = r"<SharedNdarray\ shm\.name=[a-z]+_[a-z0-9]{8}\ shape=\(1,\)\ dtype=uint16\ shm\.buf=0000>"
+        self.assertRegex(text, regex)
+
+        text = str(SharedNdarray.create((2, 2), float))
+        regex = r"<SharedNdarray\ shm\.name=[a-z]+_[a-z0-9]{8}\ shape=\(2, 2\)\ dtype=float64\ shm\.buf=00000000000000000000...>"
+        self.assertRegex(text, regex)
+
+
 class NpmpTest(MyTestCase):
     @classmethod
     def setUpClass(cls):

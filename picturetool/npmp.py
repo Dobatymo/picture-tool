@@ -5,6 +5,7 @@ from multiprocessing.shared_memory import SharedMemory
 from typing import Any, Callable, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import numpy as np
+import numpy.typing as npt
 from genutility.numpy import broadcast_shapes, get_num_chunks
 from threadpoolctl import threadpool_limits
 
@@ -26,16 +27,24 @@ class BaseArray:
 class SharedNdarray(BaseArray):
     shm: SharedMemory
     shape: Shape
-    dtype: type
+    dtype: np.dtype
 
-    def __init__(self, shm: SharedMemory, shape: Shape, dtype: type) -> None:
+    def __init__(self, shm: SharedMemory, shape: Shape, dtype: np.dtype) -> None:
         self.shm = shm
         self.shape = shape
         self.dtype = dtype
 
+    @staticmethod
+    def _nbytes(shape: Shape, dtype: np.dtype):
+        return prod(shape) * dtype.itemsize
+
     @property
     def size(self) -> int:
         return prod(self.shape)
+
+    @property
+    def nbytes(self) -> int:
+        return self._nbytes(self.shape, self.dtype)
 
     def getarray(self) -> np.ndarray:
         return np.frombuffer(self.shm.buf, dtype=self.dtype, count=self.size).reshape(self.shape)
@@ -44,15 +53,17 @@ class SharedNdarray(BaseArray):
         return self.shm.buf
 
     @classmethod
-    def create(cls, shape: Shape, dtype: type) -> "SharedNdarray":
-        nbytes = prod(shape)
+    def create(cls, shape: Shape, dtype: npt.DTypeLike) -> "SharedNdarray":
+        _dtype = np.dtype(dtype)
+        nbytes = cls._nbytes(shape, _dtype)
         shm = SharedMemory(create=True, size=nbytes)
-        return SharedNdarray(shm, shape, dtype)
+        return SharedNdarray(shm, shape, _dtype)
 
     @classmethod
     def from_array(cls, arr: np.ndarray) -> "SharedNdarray":
         shm = SharedMemory(create=True, size=arr.nbytes)
-        shm.buf[:] = arr.tobytes()
+        assert cls._nbytes(arr.shape, arr.dtype) == arr.nbytes
+        shm.buf[: arr.nbytes] = arr.tobytes()
         return SharedNdarray(shm, arr.shape, arr.dtype)
 
     def reshape(self, shape: Shape) -> "SharedNdarray":
@@ -62,7 +73,11 @@ class SharedNdarray(BaseArray):
         return SharedNdarray(self.shm, shape, self.dtype)
 
     def __str__(self):
-        return f"<SharedNdarray shm.name={self.shm.name} shape={self.shape} dtype={self.dtype.__name__} shm.buf={self.shm.buf[:10].hex()}...>"
+        if self.nbytes > 10:
+            shm_buf = f"{self.shm.buf[:10].hex()}..."
+        else:
+            shm_buf = self.shm.buf[: self.nbytes].hex()
+        return f"<SharedNdarray shm.name={self.shm.name} shape={self.shape} dtype={self.dtype.name} shm.buf={shm_buf}>"
 
 
 def chunked_parallel_task_mt(
