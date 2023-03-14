@@ -29,6 +29,7 @@ import imagehash
 import msgpack
 import numpy as np
 import piexif
+import requests
 from genutility.args import is_dir, suffix_lower
 from genutility.datetime import datetime_from_utc_timestamp_ns
 from genutility.file import StdoutFile
@@ -231,8 +232,6 @@ def maybe_decode(
 
 
 def notify(topic: str, message: str):
-    import requests
-
     requests.post(
         "https://ntfy.sh/",
         json={

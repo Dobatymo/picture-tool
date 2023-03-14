@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Generic, List, Optional, Set, Type, TypeVar
 
 import humanize
+import reverse_geocoder
 from genutility.time import MeasureTime
 from natsort import os_sorted
 from PySide2 import QtCore, QtGui, QtWidgets
@@ -222,8 +223,6 @@ class PictureWindow(QtWidgets.QMainWindow):
         self._view_clear()
 
         if self.resolve_city_names:
-            import reverse_geocoder
-
             self.rg = reverse_geocoder
 
     def _view_clear(self) -> None:
