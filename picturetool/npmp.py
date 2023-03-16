@@ -1,6 +1,6 @@
 import os
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from functools import reduce
+from functools import reduce, wraps
 from multiprocessing.shared_memory import SharedMemory
 from typing import Any, Callable, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
@@ -16,68 +16,189 @@ T = TypeVar("T")
 THREADPOOL_LIMIT: Optional[int] = None
 
 
+def copy_docs(func_with_docs: Callable) -> Callable:
+    """Decorator to apply docstring of `func_with_docs` to decorated function."""
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def inner(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        inner.__doc__ = func_with_docs.__doc__
+        return inner
+
+    return decorator
+
+
 def prod(shape):
     return reduce(lambda a, b: a * b, shape, 1)
 
 
-class BaseArray:
-    shape: Shape
-
-
-class SharedNdarray(BaseArray):
+class SharedNdarray:
     shm: SharedMemory
     shape: Shape
     dtype: np.dtype
+    offset: int
+    strides: Optional[Shape]
+    rawsize: int
 
-    def __init__(self, shm: SharedMemory, shape: Shape, dtype: np.dtype) -> None:
+    def __init__(
+        self,
+        shm: SharedMemory,
+        shape: Shape,
+        dtype: np.dtype,
+        offset: int = 0,
+        strides: Optional[Shape] = None,
+        rawsize: Optional[int] = None,
+    ) -> None:
+        if shm.buf.ndim != 1:
+            raise ValueError("The SharedMemory memoryview must be 1-dimensional")
+
+        if strides is not None and len(shape) != len(strides):
+            raise ValueError("shape and strides dimensions do not match")
+
+        _rawsize = self._nbytes(shape, dtype)
+
+        if strides is None and rawsize is not None and _rawsize != rawsize:
+            raise ValueError("rawsize doesn't match shape and dtype")
+
+        if strides is not None and rawsize is None:
+            raise ValueError("rawsize must be specified when strides is not None")
+
+        assert shm.size == shm.buf.nbytes, (shm.size, shm.buf.nbytes)
+
         self.shm = shm
         self.shape = shape
         self.dtype = dtype
+        self.offset = offset
+        self.strides = strides
+        self.rawsize = rawsize or _rawsize
 
     @staticmethod
-    def _nbytes(shape: Shape, dtype: np.dtype):
+    def _nbytes(shape: Shape, dtype: np.dtype) -> int:
         return prod(shape) * dtype.itemsize
 
     @property
     def size(self) -> int:
+        """Number of elements in the array."""
+
         return prod(self.shape)
 
     @property
     def nbytes(self) -> int:
-        return self._nbytes(self.shape, self.dtype)
+        """Total bytes consumed by the elements of the array if it were using default strides.
+        The actual size of the underlying shared memory buffer might be smaller or larger.
+        The actual size of the underlying buffer is `SharedNdarray.shm.size`,
+        for the memory required to store the data, see `SharedNdarray.rawsize`.
+        """
+
+        return self._nbytes(self.shape, self.dtype)  # not the same as `self.shm.buf.nbytes`
+
+    @property
+    def itemsize(self) -> int:
+        return self.dtype.itemsize
+
+    @property
+    def ndim(self) -> int:
+        return len(self.shape)
 
     def getarray(self) -> np.ndarray:
-        return np.frombuffer(self.shm.buf, dtype=self.dtype, count=self.size).reshape(self.shape)
+        """Returns a numpy array using the shared memory buffer."""
+
+        if self.strides is None:
+            return np.frombuffer(self.shm.buf, dtype=self.dtype, count=self.size).reshape(self.shape)
+        else:
+            return np.ndarray(self.shape, self.dtype, self.shm.buf, offset=self.offset, strides=self.strides)
 
     def getbuffer(self) -> memoryview:
+        """Returns the raw memoryview of the underlying buffer."""
+
         return self.shm.buf
+
+    def tobytes(self) -> bytes:
+        return self.shm.buf[: self.rawsize].tobytes()
 
     @classmethod
     def create(cls, shape: Shape, dtype: npt.DTypeLike) -> "SharedNdarray":
+        """Creates a SharedNdarray object from a shape and dtype."""
+
         _dtype = np.dtype(dtype)
         nbytes = cls._nbytes(shape, _dtype)
         shm = SharedMemory(create=True, size=nbytes)
-        return SharedNdarray(shm, shape, _dtype)
+        return cls(shm, shape, _dtype)
 
     @classmethod
-    def from_array(cls, arr: np.ndarray) -> "SharedNdarray":
-        shm = SharedMemory(create=True, size=arr.nbytes)
-        assert cls._nbytes(arr.shape, arr.dtype) == arr.nbytes
-        shm.buf[: arr.nbytes] = arr.tobytes()
-        return SharedNdarray(shm, arr.shape, arr.dtype)
+    def from_array(cls, arr: np.ndarray, c_contiguous: bool = True) -> "SharedNdarray":
+        """Creates a SharedNdarray object from a numpy array.
+        The data is copied and made C-contiguous.
+        """
+
+        if arr.base is None:
+            c_contiguous = True
+
+        if c_contiguous:
+            rawsize = arr.nbytes
+            shm = SharedMemory(create=True, size=rawsize)
+            shm.buf[:rawsize] = arr.tobytes()
+            offset = 0
+            strides = None
+        else:
+            assert arr.base is not None
+            rawsize = arr.base.data.nbytes
+            shm = SharedMemory(create=True, size=rawsize)
+            shm.buf[:rawsize] = arr.base.data.tobytes()
+            offset = arr.__array_interface__["data"][0] - arr.base.__array_interface__["data"][0]
+            strides = arr.strides
+
+        return cls(shm, arr.shape, arr.dtype, offset, strides, rawsize)
 
     def reshape(self, shape: Shape) -> "SharedNdarray":
+        """Changes the shape of the array to `shape`.
+        The underlying shared memory buffer is not copied or modified.
+        """
+
+        if self.strides is not None:
+            raise ValueError("Cannot reshape arrays with custom strides")
+
         if self.size != prod(shape):
             raise ValueError("New shape is not compatible with old shape")
 
         return SharedNdarray(self.shm, shape, self.dtype)
 
-    def __str__(self):
+    def astype(self, dtype: npt.DTypeLike) -> "SharedNdarray":
+        """Changes the dtype of the array to `dtype`.
+        The underlying shared memory buffer is not copied or modified.
+        """
+
+        if self.strides is not None:
+            raise ValueError("Cannot retype arrays with custom strides")
+
+        return SharedNdarray(self.shm, self.shape, np.dtype(dtype))
+
+    def __str__(self) -> str:
+        """String representation of the object.
+        `shm.buf` does not show the actual memory contents, but the interpretation regarding offset and strides.
+        """
+
         if self.nbytes > 10:
             shm_buf = f"{self.shm.buf[:10].hex()}..."
         else:
             shm_buf = self.shm.buf[: self.nbytes].hex()
-        return f"<SharedNdarray shm.name={self.shm.name} shape={self.shape} dtype={self.dtype.name} shm.buf={shm_buf}>"
+        return f"<SharedNdarray shm.name={self.shm.name} shape={self.shape} dtype={self.dtype.name} strides={self.strides} shm.buf={shm_buf}>"
+
+    def __enter__(self) -> "SharedNdarray":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.close()
+
+    @copy_docs(SharedMemory.close)
+    def close(self) -> None:
+        self.shm.close()
+
+    @copy_docs(SharedMemory.unlink)
+    def unlink(self) -> None:
+        self.shm.unlink()
 
 
 def chunked_parallel_task_mt(

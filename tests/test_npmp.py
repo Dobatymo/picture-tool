@@ -1,12 +1,10 @@
+import pickle  # nosec
+
 import numpy as np
 from genutility.test import MyTestCase, parametrize
 
 from picturetool.npmp import ChunkedParallel, SharedNdarray
 from picturetool.utils import array_from_iter, l2squared_duplicates_chunk, np_sorted, npmp_to_pairs, unique_pairs
-
-
-def sum_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return np.sum(a + b, axis=-1)
 
 
 class SharedNdarrayTest(MyTestCase):
@@ -21,6 +19,7 @@ class SharedNdarrayTest(MyTestCase):
 
         self.assertEqual(arr.size, truth_size)
         self.assertEqual(arr.nbytes, truth_nbytes)
+        self.assertGreaterEqual(arr.shm.buf.nbytes, truth_nbytes)
         self.assertGreaterEqual(arr.shm.size, truth_nbytes)
 
     @parametrize(
@@ -38,12 +37,86 @@ class SharedNdarrayTest(MyTestCase):
 
     def test_str(self):
         text = str(SharedNdarray.create((1,), "uint16"))
-        regex = r"<SharedNdarray\ shm\.name=[a-z]+_[a-z0-9]{8}\ shape=\(1,\)\ dtype=uint16\ shm\.buf=0000>"
+        regex = r"<SharedNdarray\ shm\.name=[a-z]+_[a-z0-9]{8}\ shape=\(1,\)\ dtype=uint16\ strides=None shm\.buf=0000>"
         self.assertRegex(text, regex)
 
         text = str(SharedNdarray.create((2, 2), float))
-        regex = r"<SharedNdarray\ shm\.name=[a-z]+_[a-z0-9]{8}\ shape=\(2, 2\)\ dtype=float64\ shm\.buf=00000000000000000000...>"
+        regex = r"<SharedNdarray\ shm\.name=[a-z]+_[a-z0-9]{8}\ shape=\(2, 2\)\ dtype=float64\ strides=None shm\.buf=00000000000000000000...>"
         self.assertRegex(text, regex)
+
+    @parametrize(
+        (np.arange(16, dtype=np.int32).reshape(4, 4).T, (4, 16), (16, 4)),
+        (np.arange(16, dtype=np.int32)[2:], (4,), (4,)),
+        (np.arange(16, dtype=np.int32)[2::2], (8,), (4,)),
+    )
+    def test_strides_c_contiguous(self, arr1, strides1, strides2):
+        self.assertEqual(arr1.strides, strides1)
+        sharr = SharedNdarray.from_array(arr1, c_contiguous=True)
+        arr2 = sharr.getarray()
+        self.assertEqual(arr2.strides, strides2)
+        np.testing.assert_array_equal(arr1, arr2)
+        del arr2  # fixes `BufferError: cannot close exported pointers exist` in `SharedMemory.__del__`
+
+    @parametrize(
+        (np.arange(16, dtype=np.int32).reshape(4, 4).T, (4, 16)),
+        (np.arange(16, dtype=np.int32)[2:], (4,)),
+        (np.arange(16, dtype=np.int32)[2::2], (8,)),
+    )
+    def test_strides_non_contiguous(self, arr1, strides):
+        self.assertEqual(arr1.strides, strides)
+        sharr = SharedNdarray.from_array(arr1, c_contiguous=False)
+        arr2 = sharr.getarray()
+        self.assertEqual(arr2.strides, strides)
+        np.testing.assert_array_equal(arr1, arr2)
+        del arr2  # fixes `BufferError: cannot close exported pointers exist` in `SharedMemory.__del__`
+
+    @parametrize(
+        (np.arange(16, dtype=np.int32),),
+        (np.arange(16, dtype=np.int32).reshape(4, 4).T,),
+        (np.arange(16, dtype=np.int32)[2:],),
+        (np.arange(16, dtype=np.int32)[2::2],),
+    )
+    def test_pickle(self, arr):
+        # c-contiguous
+        sharr1 = SharedNdarray.from_array(arr, True)
+        sharr2 = pickle.loads(pickle.dumps(sharr1))  # nosec
+
+        self.assertEqual(sharr1.tobytes(), sharr2.tobytes())
+        np.testing.assert_array_equal(sharr1.getarray(), sharr2.getarray())
+
+        # non-contiguous
+        sharr1 = SharedNdarray.from_array(arr, False)
+        sharr2 = pickle.loads(pickle.dumps(sharr1))  # nosec
+
+        self.assertEqual(sharr1.tobytes(), sharr2.tobytes())
+        np.testing.assert_array_equal(sharr1.getarray(), sharr2.getarray())
+
+    @parametrize(
+        (np.arange(16, dtype=np.int32),),
+        (np.arange(16, dtype=np.int32).reshape(4, 4).T,),
+        (np.arange(16, dtype=np.int32)[2:],),
+        (np.arange(16, dtype=np.int32)[2::2],),
+    )
+    def test_properties(self, arr):
+        # c-contiguous
+        sharr = SharedNdarray.from_array(arr, True)
+        self.assertEqual(arr.shape, sharr.shape)
+        self.assertEqual(arr.dtype, sharr.dtype)
+        self.assertEqual(arr.ndim, sharr.ndim)
+        self.assertIsNone(sharr.strides)
+        self.assertEqual(arr.nbytes, sharr.nbytes)
+        self.assertEqual(arr.size, sharr.size)
+        self.assertEqual(arr.nbytes, sharr.rawsize)
+
+        # non-contiguous
+        sharr = SharedNdarray.from_array(arr, False)
+        self.assertEqual(arr.shape, sharr.shape)
+        self.assertEqual(arr.dtype, sharr.dtype)
+        self.assertEqual(arr.ndim, sharr.ndim)
+        if sharr.strides is not None:
+            self.assertEqual(arr.strides, sharr.strides)
+        self.assertEqual(arr.size, sharr.size)
+        self.assertEqual(arr.nbytes, sharr.nbytes)
 
 
 class NpmpTest(MyTestCase):
