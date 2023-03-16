@@ -13,15 +13,9 @@ from genutility.typing import SizedIterable
 from tqdm import tqdm
 
 from picturetool import npmp
-from picturetool.ml_utils import (
-    annoy_duplicates_top_k,
-    annoy_from_array,
-    faiss_duplicates_threshold,
-    faiss_duplicates_top_k,
-    faiss_from_array,
-    faiss_to_pairs,
-)
+from picturetool.ml_utils import faiss_duplicates_threshold, faiss_duplicates_top_k, faiss_from_array, faiss_to_pairs
 from picturetool.utils import hamming_duplicates_chunk, l2squared_duplicates_chunk
+from picturetool.utils_annoy import annoy_duplicates_top_k, annoy_from_array
 
 
 def matmul_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -244,11 +238,11 @@ def main(
 
 
 if __name__ == "__main__":
-    from argparse import ArgumentParser
+    from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
     CHUNKSIZE = 1000
 
-    parser = ArgumentParser()
+    parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "--engine", choices=("python", "numba", "numpy", "npmt", "npmp", "dask", "faiss", "annoy"), required=True
     )
