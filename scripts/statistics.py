@@ -5,8 +5,8 @@ from typing import Iterable, Iterator, Union
 
 import pandas as pd
 from filemeta.exif import InvalidImageDataError, exif_table
+from genutility.cache import cache
 from genutility.datetime import datetime_from_utc_timestamp_ns
-from genutility.pickle import cache
 from pandasql import sqldf
 
 EntryLike = Union[Path, os.DirEntry]

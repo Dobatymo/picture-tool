@@ -44,7 +44,7 @@ class PictureWindow:
         elif from_ in ("bgr", "pillow"):
             im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
         else:
-            raise ValueError()
+            raise ValueError(f"Invalid from_ argument: {from_}")
 
         cv2.imshow(self.name, im)
         self.tick()
@@ -258,8 +258,8 @@ if __name__ == "__main__":
     parser.add_argument("--suggest", type=float, default=DEFAULT_SUGGEST_BOUND)
     parser.add_argument("--faces-db", type=Path, default=DEFAULT_FACES_DB)
     parser.add_argument("--vector-db", type=Path, default=DEFAULT_VECTOR_DB)
-    parser.add_argument("-r", "--recursive", action="store_true")
-    parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Scan directory recursively")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
     if args.verbose:
