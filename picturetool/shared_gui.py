@@ -45,9 +45,12 @@ def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -
         else:
             raise ValueError(f"Unsupported dtype {dtype}")
     except (ValueError, TypeError) as e:
-        print(type(e).__name__, e)
+        logger.warning("Invalid exif value. %s: %s", type(e).__name__, e)
         return None
-
+    except ZeroDivisionError as e:
+        if dtype in ("rational", "tuple-of-rational"):
+            return None
+        raise
 
 def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
     """Uses `pillow` to read a QPixmap from `path`.

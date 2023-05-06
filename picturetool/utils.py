@@ -12,7 +12,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import piexif
-from appdirs import user_data_dir
+from platformdirs import user_data_dir
 from dateutil import tz
 from genutility.datetime import is_aware
 from genutility.filesdb import FileDbWithId
