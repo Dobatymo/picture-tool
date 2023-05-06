@@ -25,7 +25,7 @@ url = "https://pypi.org/simple/dlib-bin/"
 
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
-appdirs = ">=1.4.4"
+platformdirs = ">=3.5.0"
 filemeta = ">=0.0.2"
 genutility = {version = ">=0.0.97", extras = ["filesdb", "numpy", "pickle", "pillow"]}
 humanize = ">=4.4.0"
