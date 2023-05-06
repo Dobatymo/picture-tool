@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 from random import randrange
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Dict
 
 import lightning.pytorch as pl
 import piexif
@@ -16,11 +16,13 @@ from torch.utils.data import DataLoader, Dataset
 from torchmetrics.functional.classification import multiclass_accuracy
 from torchvision import models
 from torchvision import transforms as T
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 
 
 def preview(dataset: Dataset) -> None:
-    for img, label in dataset:
+    for i, (img, label) in enumerate(dataset):
         orientation = [1, 6, 3, 8][label]
+        # print(i, label, orientation)
         try:
             img = _fix_orientation(img, orientation)
         except NoActionNeeded:
@@ -68,6 +70,9 @@ class AugmentedRotationDataset(Dataset):
         self.paths = paths
         self.labels = labels
         self.transform = transform
+
+    def get_num_classes(self) -> int:
+        return 4
 
     def with_transform(self, transform: Optional[Callable] = None) -> "AugmentedRotationDataset":
         return AugmentedRotationDataset(self.paths, self.labels, transform)
@@ -130,19 +135,21 @@ class AugmentedRotationDataset(Dataset):
 
 
 class LightningSqueezeNet(pl.LightningModule):
-    def __init__(self, num_classes: int):
+    def __init__(self, num_classes: int) -> None:
         super().__init__()
+        self.save_hyperparameters()
+
         self.model = models.SqueezeNet("1_1", num_classes)
         self.loss = torch.nn.CrossEntropyLoss()
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx) -> float:
         imgs, labels = batch
         outputs = self.model(imgs)
         loss = self.loss(outputs, labels)
         self.log("train_loss", loss)
         return loss
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch, batch_idx) -> Dict[str, Any]:
         imgs, labels = batch
 
         outputs = self.model(imgs)
@@ -171,9 +178,10 @@ if __name__ == "__main__":
     parser.add_argument("--modelpath", default=Path("the-model"), type=is_dir)
     parser.add_argument("--data-path", type=is_dir, required=True)
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--max-epochs", type=int, default=4)
+    parser.add_argument("--max-epochs", type=int, default=5)
     parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
     parser.add_argument("--num-threads", type=int, default=DEFAULT_NUM_THREADS)
+    parser.add_argument("--ckpt-path", default="best")
     args = parser.parse_args()
 
     if args.verbose:
@@ -184,23 +192,27 @@ if __name__ == "__main__":
     torch.set_num_threads(args.num_threads)
     torch.set_num_interop_threads(1)
 
-    model = LightningSqueezeNet(num_classes=4)
-    trainer = pl.Trainer(max_epochs=args.max_epochs, logger=None)
-    transform = T.Compose([T.PILToTensor(), T.Resize((224, 224), antialias=True), T.ConvertImageDtype(torch.float)])
-
     dataset = cache(Path("cache"))(AugmentedRotationDataset.make)(args.data_path)
+    callbacks = [ModelCheckpoint(), EarlyStopping(monitor="train_loss", mode="min")]
+    trainer = pl.Trainer(max_epochs=args.max_epochs, logger=None, callbacks=callbacks)
+    transform = T.Compose([T.PILToTensor(), T.Resize((224, 224), antialias=True), T.ConvertImageDtype(torch.float)])
 
     if args.action == "train":
         dataset = dataset.with_transform(transform)
         data_loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=args.num_workers)
+        model = LightningSqueezeNet(num_classes=dataset.get_num_classes())
 
         trainer.fit(model=model, train_dataloaders=data_loader)
+        trainer.test(dataloaders=data_loader)
 
     elif args.action == "test":
-        ckpt_path = "last"
         dataset = dataset.with_transform(transform)
         data_loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=args.num_workers)
-        trainer.test(model=model, dataloaders=data_loader, ckpt_path=ckpt_path)
+        #model = LightningSqueezeNet.load_from_checkpoint(args.ckpt_path)
+        model = LightningSqueezeNet(num_classes=dataset.get_num_classes())
+        model.load_state_dict(torch.load(args.ckpt_path)["state_dict"])
+
+        trainer.test(model=model, dataloaders=data_loader)
 
     elif args.action == "preview":
         preview(dataset)
