@@ -6,15 +6,23 @@ from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Optional, Set, Type, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Set, Tuple, Type, TypeVar
 
 import humanize
 import reverse_geocoder
 from genutility.time import MeasureTime
 from natsort import os_sorted
+from PIL import ImageOps
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from .shared_gui import PixmapViewer, QImageWithBuffer, QSystemTrayIconWithMenu, read_qt_image
+from .shared_gui import (
+    ImageTransformT,
+    PixmapViewer,
+    QImageWithBuffer,
+    QSystemTrayIconWithMenu,
+    _equalize_hist_skimage,
+    read_qt_image,
+)
 
 T = TypeVar("T")
 
@@ -31,17 +39,18 @@ class PictureCache(QtCore.QObject):
         super().__init__()
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.get = lru_cache(size)(self._call)
+        self.process: List[ImageTransformT] = []
 
-    def _call(self, path: Path) -> Future:
-        return self.executor.submit(read_qt_image, os.fspath(path))
+    def _call(self, path: Path, process: Tuple[ImageTransformT, ...]) -> Future:
+        return self.executor.submit(read_qt_image, os.fspath(path), process=process)
 
     def put(self, path: Path) -> None:
         logging.debug("Cache put %s", path)
-        self.get(path)
+        self.get(path, process=tuple(self.process))
 
     def load(self, path: Path) -> None:
         logging.debug("Cache request %s", path)
-        self.get(path).add_done_callback(partial(self.on_finished, path))
+        self.get(path, process=tuple(self.process)).add_done_callback(partial(self.on_finished, path))
 
     def cache_info(self) -> _CacheInfo:
         return self.get.cache_info()
@@ -56,6 +65,7 @@ class PictureCache(QtCore.QObject):
             logging.debug("Cache request fullfilled %s", path)
             self.pic_loaded.emit(path, image)
         except Exception as e:
+            logging.exception("Cache request error for <%s>. %s: %s", path, type(e).__name__, e)
             logging.debug("Cache request error for <%s>. %s: %s", path, type(e).__name__, e)
             self.pic_load_failed.emit(path, e)
 
@@ -136,7 +146,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     loaded: Optional[dict]
     path_idx: int
 
-    extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp"}
+    extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp", ".tif", ".tiff"}
     cache_size = 10
     deleted_subdir = "deleted"
     delete_mode = "move-to-subdir"
@@ -159,6 +169,7 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         self.statusbar_number = QtWidgets.QLabel(self)
         self.statusbar_filename = QtWidgets.QLabel(self)
+        self.statusbar_filesize = QtWidgets.QLabel(self)
         self.statusbar_make = QtWidgets.QLabel(self)
         self.statusbar_model = QtWidgets.QLabel(self)
         self.statusbar_info = QtWidgets.QLabel(self)
@@ -167,6 +178,7 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         self.statusbar.addWidget(self.statusbar_number)
         self.statusbar.addWidget(self.statusbar_filename)
+        self.statusbar.addWidget(self.statusbar_filesize)
         self.statusbar.addWidget(self.statusbar_make)
         self.statusbar.addWidget(self.statusbar_model)
         self.statusbar.addWidget(self.statusbar_info)
@@ -202,6 +214,20 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
         button_rotate_ccw.triggered.connect(self.on_rotate_ccw)
 
+        button_autocontrast = QtWidgets.QAction("&Maximize (normalize) image contrast", self)
+        button_autocontrast.setCheckable(True)
+        button_autocontrast.setStatusTip(
+            "This function calculates a histogram of the input image (or mask region), removes cutoff percent of the lightest and darkest pixels from the histogram, and remaps the image so that the darkest pixel becomes black (0), and the lightest becomes white (255)."
+        )
+        button_autocontrast.triggered[bool].connect(self.on_filter_autocontrast)
+
+        button_equalize = QtWidgets.QAction("&Histogram equalization", self)
+        button_equalize.setCheckable(True)
+        button_equalize.setStatusTip(
+            "This function applies a non-linear mapping to the input image, in order to create a uniform distribution of grayscale values in the output image."
+        )
+        button_equalize.triggered[bool].connect(self.on_filter_equalize)
+
         menu = self.menuBar()
         file_menu = menu.addMenu("&File")
         file_menu.addAction(button_file_open)
@@ -212,6 +238,10 @@ class PictureWindow(QtWidgets.QMainWindow):
         view_menu.addAction(self.button_fit_to_window)
         view_menu.addAction(button_rotate_cw)
         view_menu.addAction(button_rotate_ccw)
+
+        view_menu = menu.addMenu("&Filters")
+        view_menu.addAction(button_autocontrast)
+        view_menu.addAction(button_equalize)
 
         self.cache = PictureCache(self.cache_size)
         self.cache.pic_loaded.connect(self.on_pic_loaded)
@@ -231,6 +261,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(self.wm.app_name)
         self.statusbar_number.setText(None)
         self.statusbar_filename.setText(None)
+        self.statusbar_filesize.setText(None)
         self.statusbar_make.setText(None)
         self.statusbar_model.setText(None)
         self.statusbar_info.setText(None)
@@ -280,6 +311,9 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.cache.load(path)
         else:
             self._view_clear()
+
+    def reload(self):
+        self.cache.load(self.paths[self.path_idx])
 
     def load_next(self):
         if self.path_idx < len(self.paths) - 1:
@@ -399,6 +433,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
         self.statusbar_filename.setText(path.name)
+        self.statusbar_filesize.setText(str(path.stat().st_size))
         self.statusbar_make.setText(image.meta.get("make"))
         self.statusbar_model.setText(image.meta.get("model"))
         self.statusbar_info.setText(self.make_cam_info_string(image.meta))
@@ -415,6 +450,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
             self.statusbar_filename.setText(None)
+            self.statusbar_filesize.setText(None)
             self.statusbar_make.setText(None)
             self.statusbar_model.setText(None)
             self.statusbar_info.setText(None)
@@ -449,6 +485,22 @@ class PictureWindow(QtWidgets.QMainWindow):
         tr = QtGui.QTransform()
         tr.rotate(-90)
         self.viewer.label.transform(tr)
+
+    @QtCore.Slot()
+    def on_filter_autocontrast(self, checked: bool) -> None:
+        if checked:
+            self.cache.process.append(ImageOps.autocontrast)
+        else:
+            self.cache.process.remove(ImageOps.autocontrast)
+        self.reload()
+
+    @QtCore.Slot()
+    def on_filter_equalize(self, checked: bool) -> None:
+        if checked:
+            self.cache.process.append(_equalize_hist_skimage)
+        else:
+            self.cache.process.remove(_equalize_hist_skimage)
+        self.reload()
 
     @QtCore.Slot(bool)
     def on_fit_to_window(self, checked: bool) -> None:

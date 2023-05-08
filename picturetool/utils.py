@@ -12,12 +12,12 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import piexif
-from platformdirs import user_data_dir
 from dateutil import tz
 from genutility.datetime import is_aware
 from genutility.filesdb import FileDbWithId
 from genutility.numpy import hamming_dist_packed
 from pandas._typing import ValueKeyFunc
+from platformdirs import user_data_dir
 
 T = TypeVar("T")
 
