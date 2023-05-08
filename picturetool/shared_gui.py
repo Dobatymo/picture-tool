@@ -1,6 +1,6 @@
 import logging
 from fractions import Fraction
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import piexif
 from genutility.pillow import NoActionNeeded, fix_orientation
@@ -47,12 +47,18 @@ def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -
     except (ValueError, TypeError) as e:
         logger.warning("Invalid exif value. %s: %s", type(e).__name__, e)
         return None
-    except ZeroDivisionError as e:
+    except ZeroDivisionError:
         if dtype in ("rational", "tuple-of-rational"):
             return None
         raise
 
-def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
+
+ImageTransformT = Callable[[Image.Image], Image.Image]
+
+
+def read_qt_image(
+    path: str, rotate: bool = True, process: Optional[Iterable[ImageTransformT]] = None
+) -> QImageWithBuffer:
     """Uses `pillow` to read a QPixmap from `path`.
     This supports more image formats than Qt directly.
     """
@@ -66,7 +72,9 @@ def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
 
     modemap = {
         "L": QtGui.QImage.Format_Grayscale8,
+        "I;16": QtGui.QImage.Format_Grayscale16,
         "RGB": QtGui.QImage.Format_RGB888,
+        "BGR;24": QtGui.QImage.Format_BGR888,
         "RGBA": QtGui.QImage.Format_RGBA8888,
         "RGBX": QtGui.QImage.Format_RGBX8888,
         "RGBa": QtGui.QImage.Format_RGBA8888_Premultiplied,
@@ -74,7 +82,9 @@ def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
 
     channelmap = {
         "L": 1,
+        "I;16": 2,
         "RGB": 3,
+        "BGR;24": 3,
         "RGBA": 4,
         "RGBX": 4,
     }
@@ -102,6 +112,14 @@ def read_qt_image(path: str, rotate: bool = True) -> QImageWithBuffer:
             }
         else:
             meta = {}
+
+        if process:
+            for func in process:
+                try:
+                    img = func(img)
+                except OSError:
+                    logging.debug("Applying %s to <%s> [mode=%s] failed", func.__name__, path, img.mode)
+                    raise
 
         if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
             # Unsupported image mode or image scanlines not 32-bit aligned
@@ -349,3 +367,41 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
     @QtCore.Slot(QtWidgets.QAction)
     def on_triggered(self, action):
         logging.debug("%s", action)
+
+
+def _equalize_hist_cv2(img: Image.Image) -> Image.Image:
+    """Histogram equalization using opencv.
+    Only supports 8-bit grayscale images.
+    Other grayscale images are converted to 8-bit first.
+    fast: 0.05s
+    """
+
+    import cv2
+    import numpy as np
+
+    arr = np.array(img)
+    if img.mode == "L":
+        pass
+    elif img.mode == "I;16":
+        arr = (arr / 256).astype(np.uint8)
+    else:
+        raise ValueError("Only grayscale images can be equalized")
+    arr = cv2.equalizeHist(arr)
+    return Image.fromarray(arr, "L")
+
+
+def _equalize_hist_skimage(img: Image.Image) -> Image.Image:
+    """Histogram equalization using scikit-image.
+    Supports all grayscale images.
+    slow 8-bit: 0.36s, 16-bit: 0.67s
+    """
+
+    import numpy as np
+    from skimage.exposure import equalize_hist
+
+    arr = np.array(img)
+    if len(arr.shape) != 2:
+        raise ValueError("Only grayscale images can be equalized")
+    arr = equalize_hist(arr, nbins=256) * 256
+    arr = arr.astype(np.uint8)
+    return Image.fromarray(arr, "L")

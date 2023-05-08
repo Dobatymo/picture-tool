@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 from random import randrange
-from typing import Any, Callable, List, Optional, Tuple, Dict
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import lightning.pytorch as pl
 import piexif
@@ -11,12 +11,12 @@ from genutility.cache import cache
 from genutility.exceptions import NoActionNeeded
 from genutility.filesystem import scandir_ext
 from genutility.pillow import _fix_orientation
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchmetrics.functional.classification import multiclass_accuracy
 from torchvision import models
 from torchvision import transforms as T
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 
 
 def preview(dataset: Dataset) -> None:
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     elif args.action == "test":
         dataset = dataset.with_transform(transform)
         data_loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=args.num_workers)
-        #model = LightningSqueezeNet.load_from_checkpoint(args.ckpt_path)
+        # model = LightningSqueezeNet.load_from_checkpoint(args.ckpt_path)
         model = LightningSqueezeNet(num_classes=dataset.get_num_classes())
         model.load_state_dict(torch.load(args.ckpt_path)["state_dict"])
 
