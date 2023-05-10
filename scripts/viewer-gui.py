@@ -22,10 +22,23 @@ if __name__ == "__main__":
     from genutility.args import existing_path
 
     parser = ArgumentParser()
-    parser.add_argument("paths", metavar="PATH", type=existing_path, nargs="*", help="Open image file")
-    parser.add_argument("--mode", choices=("fit", "original"), default="fit")
-    parser.add_argument("--resolve-city-names", action="store_true")
-    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument(
+        "paths",
+        metavar="PATH",
+        type=existing_path,
+        nargs="*",
+        help="Image files or folders to open. If a single file is specified, the other images from that folder will be added as context. If multiple files or folders are specified only they or there contents will be loaded, no other context.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("fit", "original"),
+        default="fit",
+        help="Resize files to fit the window, or show in original resolution",
+    )
+    parser.add_argument(
+        "--resolve-city-names", action="store_true", help="Resolve exif GPS coordinates to city names (slow)"
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Log additional information useful for debugging")
     args = parser.parse_args()
 
     log_fmt = "%(asctime)s %(levelname)s:%(name)s:%(funcName)s:%(message)s"
@@ -57,6 +70,7 @@ if __name__ == "__main__":
 
     window = wm.create()
 
+    # only load images after Qt loop is up and running
     QtCore.QTimer.singleShot(0, lambda: window.load_pictures(args.paths))
 
     ret = app.exec_()

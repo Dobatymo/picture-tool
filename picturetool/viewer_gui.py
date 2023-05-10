@@ -6,7 +6,7 @@ from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Optional, Set, Tuple, Type, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 import humanize
 import reverse_geocoder
@@ -21,13 +21,14 @@ from .shared_gui import (
     QImageWithBuffer,
     QSystemTrayIconWithMenu,
     _equalize_hist_skimage,
+    _grayscale,
     read_qt_image,
 )
 
 T = TypeVar("T")
 
 
-def gps_dms_to_dd(dms: List[Fraction]) -> float:
+def gps_dms_to_dd(dms: Sequence[Fraction]) -> float:
     return float(dms[0] + dms[1] / 60 + dms[2] / 3600)
 
 
@@ -35,11 +36,13 @@ class PictureCache(QtCore.QObject):
     pic_loaded = QtCore.Signal(Path, QImageWithBuffer)
     pic_load_failed = QtCore.Signal(Path, Exception)
 
+    process: List[ImageTransformT]
+
     def __init__(self, size: Optional[int] = None):
         super().__init__()
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.get = lru_cache(size)(self._call)
-        self.process: List[ImageTransformT] = []
+        self.process = []
 
     def _call(self, path: Path, process: Tuple[ImageTransformT, ...]) -> Future:
         return self.executor.submit(read_qt_image, os.fspath(path), process=process)
@@ -62,7 +65,7 @@ class PictureCache(QtCore.QObject):
     def on_finished(self, path: Path, future: Future) -> None:
         try:
             image = future.result()
-            logging.debug("Cache request fullfilled %s", path)
+            logging.debug("Cache request fulfilled <%s>", path)
             self.pic_loaded.emit(path, image)
         except Exception as e:
             logging.exception("Cache request error for <%s>. %s: %s", path, type(e).__name__, e)
@@ -174,6 +177,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_model = QtWidgets.QLabel(self)
         self.statusbar_info = QtWidgets.QLabel(self)
         self.statusbar_scale = QtWidgets.QLabel(self)
+        self.statusbar_transforms = QtWidgets.QLabel(self)
         self.statusbar = QtWidgets.QStatusBar(self)
 
         self.statusbar.addWidget(self.statusbar_number)
@@ -183,6 +187,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar.addWidget(self.statusbar_model)
         self.statusbar.addWidget(self.statusbar_info)
         self.statusbar.addWidget(self.statusbar_scale)
+        self.statusbar.addWidget(self.statusbar_transforms)
         self.setStatusBar(self.statusbar)
 
         button_file_open = QtWidgets.QAction("&Open", self)
@@ -214,6 +219,11 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
         button_rotate_ccw.triggered.connect(self.on_rotate_ccw)
 
+        button_grayscale = QtWidgets.QAction("&Grayscale", self)
+        button_grayscale.setCheckable(True)
+        button_grayscale.setStatusTip("Convert to grayscale")
+        button_grayscale.triggered[bool].connect(self.on_filter_grayscale)
+
         button_autocontrast = QtWidgets.QAction("&Maximize (normalize) image contrast", self)
         button_autocontrast.setCheckable(True)
         button_autocontrast.setStatusTip(
@@ -230,18 +240,22 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         menu = self.menuBar()
         file_menu = menu.addMenu("&File")
+        file_menu.menuAction().setStatusTip("Basic app operations")
         file_menu.addAction(button_file_open)
         file_menu.addAction(button_file_close)
         file_menu.addAction(button_file_quit)
 
         view_menu = menu.addMenu("&View")
+        view_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
         view_menu.addAction(self.button_fit_to_window)
         view_menu.addAction(button_rotate_cw)
         view_menu.addAction(button_rotate_ccw)
 
-        view_menu = menu.addMenu("&Filters")
-        view_menu.addAction(button_autocontrast)
-        view_menu.addAction(button_equalize)
+        filters_menu = menu.addMenu("&Filters")
+        filters_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
+        filters_menu.addAction(button_grayscale)
+        filters_menu.addAction(button_autocontrast)
+        filters_menu.addAction(button_equalize)
 
         self.cache = PictureCache(self.cache_size)
         self.cache.pic_loaded.connect(self.on_pic_loaded)
@@ -285,7 +299,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         except IndexError:
             pass
 
-    def load_pictures(self, paths: List[Path]) -> None:
+    def load_pictures(self, paths: Sequence[Path]) -> None:
         logging.debug("Loading pictures from: %s", ", ".join(f"<{os.fspath(p)}>" for p in paths))
         if len(paths) == 0:
             return
@@ -298,10 +312,17 @@ class PictureWindow(QtWidgets.QMainWindow):
                 self.paths = self._get_pic_paths(p)
                 self.path_idx = 0
             else:
-                assert False, f"{p} is not file or directory"
+                raise ValueError("Path <{p}> is neither file nor directory")
         else:
-            self.paths = paths
             self.path_idx = 0
+            self.paths = []
+            for p in paths:
+                if p.is_file():
+                    self.paths.append(p)
+                elif p.is_dir():
+                    self.paths.extend(self._get_pic_paths(p))
+                else:
+                    logging.warning("Path <%s> is neither file nor directory", p)
 
         if self.paths:
             path = self.paths[self.path_idx]
@@ -312,31 +333,32 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             self._view_clear()
 
-    def reload(self):
-        self.cache.load(self.paths[self.path_idx])
+    def reload(self) -> None:
+        if self.path_idx >= 0:
+            self.cache.load(self.paths[self.path_idx])
 
-    def load_next(self):
+    def load_next(self) -> None:
         if self.path_idx < len(self.paths) - 1:
             self.path_idx += 1
             self.try_preload(self.path_idx + 1)
             self.cache.load(self.paths[self.path_idx])
             self.last_action = "next"
 
-    def load_prev(self):
+    def load_prev(self) -> None:
         if self.path_idx > 0:
             self.path_idx -= 1
             self.try_preload(self.path_idx - 1)
             self.cache.load(self.paths[self.path_idx])
             self.last_action = "prev"
 
-    def load_first(self):
+    def load_first(self) -> None:
         if self.path_idx != 0:
             self.path_idx = 0
             self.try_preload(self.path_idx + 1)
             self.cache.load(self.paths[self.path_idx])
             self.last_action = "first"
 
-    def load_last(self):
+    def load_last(self) -> None:
         if self.path_idx != len(self.paths) - 1:
             self.path_idx = len(self.paths) - 1
             self.try_preload(self.path_idx - 1)
@@ -398,14 +420,12 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             raise RuntimeError("Not implemented yet")
 
-    # signal handlers
-
     @lru_cache(1000)
-    def get_location(self, lat: List[Fraction], lon: List[Fraction]) -> Optional[str]:
+    def get_location(self, lat: Sequence[Fraction], lon: Sequence[Fraction]) -> Optional[str]:
         lat_lon = gps_dms_to_dd(lat), gps_dms_to_dd(lon)
         return self.rg.get(lat_lon)["name"]
 
-    def make_cam_info_string(self, meta: dict) -> str:
+    def make_cam_info_string(self, meta: Dict[str, Any]) -> str:
         if self.resolve_city_names:
             try:
                 with MeasureTime() as stopwatch:
@@ -426,8 +446,10 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         return ", ".join(f"{k}: {meta[v]}" for k, v in vals.items() if meta.get(v))
 
+    # signal handlers
+
     @QtCore.Slot(Path, QImageWithBuffer)
-    def on_pic_loaded(self, path: Path, image: QImageWithBuffer):
+    def on_pic_loaded(self, path: Path, image: QImageWithBuffer) -> None:
         idx = self.paths.index(path)
         self.loaded = {"path": path, "idx": idx}
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
@@ -441,7 +463,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.viewer.setPixmap(image.get_pixmap())
 
     @QtCore.Slot(Path, Exception)
-    def on_pic_load_failed(self, path: Path, e: Exception):
+    def on_pic_load_failed(self, path: Path, e: Exception) -> None:
         idx = self.paths.index(path)
         if isinstance(e, FileNotFoundError):
             del_path = self.paths.pop(idx)
@@ -460,7 +482,8 @@ class PictureWindow(QtWidgets.QMainWindow):
             )
 
     @QtCore.Slot()
-    def on_file_open(self):
+    def on_file_open(self) -> None:
+        # fixme: how to open files and/or directories?
         name_filters = " ".join(f"*{ext}" for ext in self.extensions)
         dialog = QtWidgets.QFileDialog(self)
         dialog.setFileMode(QtWidgets.QFileDialog.ExistingFiles)
@@ -475,16 +498,24 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.activateWindow()
 
     @QtCore.Slot()
-    def on_rotate_cw(self):
+    def on_rotate_cw(self) -> None:
         tr = QtGui.QTransform()
         tr.rotate(90)
-        self.viewer.label.transform(tr)
+        self.viewer.label.transform(tr, "rotate")
 
     @QtCore.Slot()
-    def on_rotate_ccw(self):
+    def on_rotate_ccw(self) -> None:
         tr = QtGui.QTransform()
         tr.rotate(-90)
-        self.viewer.label.transform(tr)
+        self.viewer.label.transform(tr, "rotate")
+
+    @QtCore.Slot()
+    def on_filter_grayscale(self, checked: bool) -> None:
+        if checked:
+            self.cache.process.append(_grayscale)
+        else:
+            self.cache.process.remove(_grayscale)
+        self.reload()
 
     @QtCore.Slot()
     def on_filter_autocontrast(self, checked: bool) -> None:
@@ -509,6 +540,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(float)
     def on_scale_changed(self, scale: float) -> None:
         self.statusbar_scale.setText(f"{scale:.03f}")
+        self.statusbar_transforms.setText("->".join(self.viewer.label.transforms))
 
     # qt event handlers
 

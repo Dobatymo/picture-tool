@@ -119,7 +119,7 @@ class AugmentedRotationDataset(Dataset):
         with open(path, "rb") as fr:
             img = Image.open(fr).convert("RGB")
 
-        dy = randrange(0, 4)
+        dy = randrange(0, 4)  # nosec
 
         if dy != 0:
             img = img.transpose(self.rot_actions[dy])
@@ -178,10 +178,12 @@ if __name__ == "__main__":
     parser.add_argument("--modelpath", default=Path("the-model"), type=is_dir)
     parser.add_argument("--data-path", type=is_dir, required=True)
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--max-epochs", type=int, default=5)
+    parser.add_argument("--max-epochs", type=int, default=10)
     parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
     parser.add_argument("--num-threads", type=int, default=DEFAULT_NUM_THREADS)
     parser.add_argument("--ckpt-path", default="best")
+    parser.add_argument("--batch-size-train", default=8)
+    parser.add_argument("--batch-size-test", default=16)
     args = parser.parse_args()
 
     if args.verbose:
@@ -193,24 +195,26 @@ if __name__ == "__main__":
     torch.set_num_interop_threads(1)
 
     dataset = cache(Path("cache"))(AugmentedRotationDataset.make)(args.data_path)
-    callbacks = [ModelCheckpoint(), EarlyStopping(monitor="train_loss", mode="min")]
-    trainer = pl.Trainer(max_epochs=args.max_epochs, logger=None, callbacks=callbacks)
+    early_stop_callback = EarlyStopping(monitor="train_loss", patience=5, mode="min")
+    checkpoint_callback = ModelCheckpoint(save_top_k=1, monitor="train_loss", mode="min")
+    trainer = pl.Trainer(max_epochs=args.max_epochs, logger=None, callbacks=[early_stop_callback, checkpoint_callback])
     transform = T.Compose([T.PILToTensor(), T.Resize((224, 224), antialias=True), T.ConvertImageDtype(torch.float)])
 
     if args.action == "train":
         dataset = dataset.with_transform(transform)
-        data_loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=args.num_workers)
+        data_loader = DataLoader(dataset, batch_size=args.batch_size_train, shuffle=True, num_workers=args.num_workers)
         model = LightningSqueezeNet(num_classes=dataset.get_num_classes())
 
         trainer.fit(model=model, train_dataloaders=data_loader)
-        trainer.test(dataloaders=data_loader)
+        print("Best model", checkpoint_callback.best_model_path)
+        trainer.test(dataloaders=data_loader, ckpt_path="best")
 
     elif args.action == "test":
         dataset = dataset.with_transform(transform)
-        data_loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=args.num_workers)
-        # model = LightningSqueezeNet.load_from_checkpoint(args.ckpt_path)
-        model = LightningSqueezeNet(num_classes=dataset.get_num_classes())
-        model.load_state_dict(torch.load(args.ckpt_path)["state_dict"])
+        data_loader = DataLoader(dataset, batch_size=args.batch_size_test, shuffle=False, num_workers=args.num_workers)
+        model = LightningSqueezeNet.load_from_checkpoint(args.ckpt_path)
+        # model = LightningSqueezeNet(num_classes=dataset.get_num_classes())
+        # model.load_state_dict(torch.load(args.ckpt_path)["state_dict"])
 
         trainer.test(model=model, dataloaders=data_loader)
 
