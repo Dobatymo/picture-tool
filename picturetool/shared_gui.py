@@ -1,6 +1,7 @@
 import logging
+from copy import deepcopy
 from fractions import Fraction
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import piexif
 from genutility.pillow import NoActionNeeded, fix_orientation
@@ -13,14 +14,33 @@ register_heif_opener()
 logger = logging.getLogger(__name__)
 
 
+class QPixmapWithMeta:
+    pixmap: QtGui.QPixmap
+    meta: Dict[str, Any]
+
+    def __init__(self, pixmap: QtGui.QPixmap, meta: Dict[str, Any]) -> None:
+        self.pixmap = pixmap
+        self.meta = meta
+
+    def transformed(self, tr: QtGui.QTransform, name: str):
+        pixmap = self.pixmap.transformed(tr)
+        meta = deepcopy(self.meta)
+        meta["transforms"].append(name)
+        return QPixmapWithMeta(pixmap, meta)
+
+    def size(self) -> QtCore.QSize:
+        return self.pixmap.size()
+
+
 class QImageWithBuffer:
-    def __init__(self, image: QtGui.QImage, buffer: QtCore.QByteArray, meta: dict) -> None:
+    def __init__(self, image: QtGui.QImage, buffer: QtCore.QByteArray, meta: Dict[str, Any]) -> None:
         self.image = image
         self.buffer = buffer
         self.meta = meta
 
-    def get_pixmap(self) -> QtGui.QPixmap:
-        return QtGui.QPixmap.fromImage(self.image)
+    def get_pixmap(self) -> QPixmapWithMeta:
+        pixmap = QtGui.QPixmap.fromImage(self.image)
+        return QPixmapWithMeta(pixmap, self.meta)
 
 
 def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -> Any:
@@ -90,33 +110,37 @@ def read_qt_image(
     }
 
     with Image.open(path) as img:
+        meta: Dict[str, Any] = {"transforms": []}
+
         if "exif" in img.info:
             exif = piexif.load(img.info["exif"])
 
             try:
                 img = fix_orientation(img, exif)
+                meta["transforms"].append("rotate")
             except (NoActionNeeded, KeyError):
                 pass
 
-            meta = {
-                "make": piexif_get(exif, "0th", piexif.ImageIFD.Make, "ascii"),
-                "model": piexif_get(exif, "0th", piexif.ImageIFD.Model, "ascii"),
-                "exposure-time": piexif_get(exif, "Exif", piexif.ExifIFD.ExposureTime, "rational"),
-                "f-number": piexif_get(exif, "Exif", piexif.ExifIFD.FNumber, "rational"),
-                "iso-speed": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeed, "int"),
-                "aperture-value": piexif_get(exif, "Exif", piexif.ExifIFD.ApertureValue, "rational"),
-                "focal-length": piexif_get(exif, "Exif", piexif.ExifIFD.FocalLength, "rational"),
-                "iso": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeedRatings, "int"),
-                "gps-lat": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitude, "tuple-of-rational"),
-                "gps-lon": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
-            }
-        else:
-            meta = {}
+            meta.update(
+                {
+                    "make": piexif_get(exif, "0th", piexif.ImageIFD.Make, "ascii"),
+                    "model": piexif_get(exif, "0th", piexif.ImageIFD.Model, "ascii"),
+                    "exposure-time": piexif_get(exif, "Exif", piexif.ExifIFD.ExposureTime, "rational"),
+                    "f-number": piexif_get(exif, "Exif", piexif.ExifIFD.FNumber, "rational"),
+                    "iso-speed": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeed, "int"),
+                    "aperture-value": piexif_get(exif, "Exif", piexif.ExifIFD.ApertureValue, "rational"),
+                    "focal-length": piexif_get(exif, "Exif", piexif.ExifIFD.FocalLength, "rational"),
+                    "iso": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeedRatings, "int"),
+                    "gps-lat": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitude, "tuple-of-rational"),
+                    "gps-lon": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
+                }
+            )
 
         if process:
             for func in process:
                 try:
                     img = func(img)
+                    meta["transforms"].append(func.__name__)
                 except OSError:
                     logging.debug("Applying %s to <%s> [mode=%s] failed", func.__name__, path, img.mode)
                     raise
@@ -124,6 +148,7 @@ def read_qt_image(
         if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
             # Unsupported image mode or image scanlines not 32-bit aligned
             img = img.convert("RGBA")
+            meta["transforms"].append("convert-color-to-rgba")
 
         # QImage simply references the QByteArray. So you need to keep it around.
 
@@ -139,6 +164,8 @@ def read_qt_pixmap(path: str) -> QtGui.QPixmap:
 
 
 class AspectRatioPixmapLabel(QtWidgets.QLabel):
+    pm: Optional[QPixmapWithMeta]
+
     def __init__(
         self,
         fit_to_widget: bool = True,
@@ -153,16 +180,34 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         self.setMinimumSize(1, 1)
         self.setScaledContents(False)  # we do the scaling ourselves
         self.setAlignment(QtCore.Qt.AlignCenter)
-        self.pm: Optional[QtGui.QPixmap] = None
+        self.pm = None
 
         # set properties
         self.fit_to_widget = fit_to_widget
         self.fixed_size = fixed_size
         self._scale_factor = 1.0
+        self._transforms: List[str] = []
+
+    @property
+    def transforms(self) -> List[str]:
+        if self.pm is None:
+            return self._transforms
+        else:
+            return self.pm.meta.get("transforms", []) + self._transforms
 
     def _scaled_pixmap(self, size: QtCore.QSize) -> QtGui.QPixmap:
         assert self.pm is not None
-        return self.pm.scaled(size * self.scale_factor, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+
+        new_size = size * self.scale_factor
+        print(size, new_size, self.pm.size())
+        if self.pm.size() == new_size:
+            self._transforms = []
+            return self.pm.pixmap
+        else:
+            self._transforms = ["scale"]
+            return self.pm.pixmap.scaled(
+                size * self.scale_factor, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+            )
 
     def resize_pixmap(self, size: QtCore.QSize):
         # don't overwrite `super().resize()` here by accident
@@ -209,9 +254,9 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         if self.pm is not None:
             self.scale()
 
-    def transform(self, tr: QtGui.QTransform) -> None:
+    def transform(self, tr: QtGui.QTransform, name: str) -> None:
         assert self.pm is not None
-        self.setPixmap(self.pm.transformed(tr))
+        self.setPixmap(self.pm.transformed(tr, name))
 
     # qt funcs
 
@@ -219,7 +264,7 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         super().clear()
         self.pm = None
 
-    def setPixmap(self, pm: QtGui.QPixmap) -> None:
+    def setPixmap(self, pm: QPixmapWithMeta) -> None:
         self.pm = pm
         self.scale()
 
@@ -243,6 +288,9 @@ class PixmapViewer(QtWidgets.QScrollArea):
 
     arrow_keys = [QtCore.Qt.Key_Left, QtCore.Qt.Key_Right, QtCore.Qt.Key_Up, QtCore.Qt.Key_Down]
 
+    label: AspectRatioPixmapLabel
+    fit_to_window: bool
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
         self.label = AspectRatioPixmapLabel(parent=parent)
@@ -250,7 +298,7 @@ class PixmapViewer(QtWidgets.QScrollArea):
         self.setWidget(self.label)
 
         # set properties
-        self._fixed_size = None  # set first
+        self._fixed_size: Optional[Tuple[int, int]] = None  # set first
         self.fit_to_window = True
 
     @property
@@ -267,7 +315,7 @@ class PixmapViewer(QtWidgets.QScrollArea):
             self.setWidgetResizable(False)
             self.label.fixed_size = QtCore.QSize(*value)
 
-    @property
+    @property  # type: ignore[no-redef]
     def fit_to_window(self) -> bool:
         return self._fit_to_window
 
@@ -282,7 +330,7 @@ class PixmapViewer(QtWidgets.QScrollArea):
 
     # pass-through
 
-    def setPixmap(self, pm: QtGui.QPixmap) -> None:
+    def setPixmap(self, pm: QPixmapWithMeta) -> None:
         self.label.setPixmap(pm)
         self.scale_changed.emit(self.label.scale_factor)
 
@@ -405,3 +453,7 @@ def _equalize_hist_skimage(img: Image.Image) -> Image.Image:
     arr = equalize_hist(arr, nbins=256) * 256
     arr = arr.astype(np.uint8)
     return Image.fromarray(arr, "L")
+
+
+def _grayscale(img: Image.Image) -> Image.Image:
+    return img.convert("L")

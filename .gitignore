@@ -12,3 +12,6 @@ poetry.toml
 
 # binaries
 dist-dlib/
+
+# dev cache
+lightning_logs/
