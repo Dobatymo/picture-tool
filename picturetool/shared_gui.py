@@ -51,7 +51,7 @@ def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -
 
     try:
         if dtype == "ascii":
-            return val.decode("ascii")
+            return val.decode("ascii").rstrip("\0")
         elif dtype == "utf-8":
             return val.decode("utf-8")
         elif dtype == "int":
@@ -142,7 +142,7 @@ def read_qt_image(
                     img = func(img)
                     meta["transforms"].append(func.__name__)
                 except OSError:
-                    logging.debug("Applying %s to <%s> [mode=%s] failed", func.__name__, path, img.mode)
+                    logger.debug("Applying %s to <%s> [mode=%s] failed", func.__name__, path, img.mode)
                     raise
 
         if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
@@ -199,7 +199,6 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
         assert self.pm is not None
 
         new_size = size * self.scale_factor
-        print(size, new_size, self.pm.size())
         if self.pm.size() == new_size:
             self._transforms = []
             return self.pm.pixmap
@@ -399,22 +398,22 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
     """
     @QtCore.Slot()
     def on_aboutToHide(self):
-        logging.debug("called")
+        logger.debug("called")
 
     @QtCore.Slot()
     def on_aboutToShow(self):
-        logging.debug("called")
+        logger.debug("called")
     """
 
     """
     @QtCore.Slot(QtWidgets.QAction)
     def on_hovered(self, action):
-        logging.debug("%s", action)
+        logger.debug("%s", action)
     """
 
     @QtCore.Slot(QtWidgets.QAction)
     def on_triggered(self, action):
-        logging.debug("%s", action)
+        logger.debug("%s", action)
 
 
 def _equalize_hist_cv2(img: Image.Image) -> Image.Image:
