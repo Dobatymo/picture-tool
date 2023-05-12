@@ -1,12 +1,13 @@
 import re
 import threading
 from datetime import datetime, timedelta, tzinfo
+from fractions import Fraction
 from functools import total_ordering
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
 from queue import Queue
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar, Union
 
 import networkx as nx
 import numpy as np
@@ -27,6 +28,19 @@ APP_VERSION = "0.1"
 
 DEFAULT_APPDATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR))
 DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
+
+GpsT = Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]
+
+
+def _gps_tuple_to_fraction(gps: GpsT) -> Fraction:
+    return Fraction(*gps[0]) + Fraction(*gps[1]) / 60 + Fraction(*gps[2]) / 3600
+
+
+def parse_gpsinfo(gpsinfo: Dict[str, Any]) -> Tuple[float, float]:
+    lat = gpsinfo["GPSLatitude"]
+    lon = gpsinfo["GPSLongitude"]
+
+    return float(_gps_tuple_to_fraction(lat)), float(_gps_tuple_to_fraction(lon))
 
 
 def to_datetime(col: pd.Series, in_tz: Optional[tzinfo] = None, out_tz: Optional[tzinfo] = None) -> datetime:
