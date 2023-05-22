@@ -1,16 +1,17 @@
 import logging
+import os
 import sys
 from argparse import ArgumentParser
 from collections import defaultdict
-from os import fspath
 from pathlib import Path
 from typing import Any, DefaultDict, Dict
 
 import piexif
 import pyexiv2
 from genutility.args import is_dir
+from genutility.filesystem import scandir_ext
 
-from picturetool.utils import Max, get_exif_dates, with_stem
+from picturetool.utils import Max, extensions_jpeg, get_exif_dates, with_stem
 
 modelmap = {
     b"iPhone SE (2nd generation)": "iPhone SE 2",
@@ -18,7 +19,7 @@ modelmap = {
 
 
 def get_items(path: Path) -> Dict[str, Any]:
-    exif_dict = piexif.load(fspath(path))
+    exif_dict = piexif.load(os.fspath(path))
 
     maker = exif_dict["0th"][271].decode("ascii")
     model = exif_dict["0th"][272]
@@ -48,13 +49,15 @@ def main() -> None:
     parser.add_argument("--sort-by", type=str, default=DEFAULT_SORT_BY)
     parser.add_argument("--path", type=is_dir, required=True)
     parser.add_argument("--no-fail-missing", action="store_true")
+    parser.add_argument("--extensions", nargs="+", default=extensions_jpeg)
     args = parser.parse_args()
 
     files = {}
 
     # gather info
-    for path in args.path.rglob("*.jpg"):
-        with pyexiv2.Image(fspath(path)) as img:
+    for entry in scandir_ext(args.path, args.extensions):
+        path = Path(entry)
+        with pyexiv2.Image(os.fspath(path)) as img:
             has_iptc = bool(img.read_iptc())
             has_exif = bool(img.read_exif())
 

@@ -1,5 +1,5 @@
+import os
 from argparse import ArgumentParser
-from os import fspath
 from typing import Dict
 
 import cv2  # pip install opencv-contrib-python
@@ -7,10 +7,13 @@ import kornia.filters
 import numpy as np
 import piq
 from genutility.args import is_dir
+from genutility.filesystem import scandir_ext
 
 # from imquality import brisque  # pip install image-quality
 from PIL import Image
 from torchvision.transforms import functional as f
+
+from picturetool.utils import extensions
 
 
 def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
@@ -63,14 +66,15 @@ def torch_iqa_score(path: str) -> Dict[str, float]:
 def main():
     parser = ArgumentParser()
     parser.add_argument("directory", type=is_dir)
+    parser.add_argument("--extensions", nargs="+", default=extensions)
     args = parser.parse_args()
 
-    it = args.directory.rglob("*.jpg")
+    it = scandir_ext(args.directory, args.extensions)
 
     for path in it:
-        d = cv2_iqa_score(fspath(path))
+        d = cv2_iqa_score(os.fspath(path))
         print("cv2", path.name, d)
-        d = torch_iqa_score(fspath(path))
+        d = torch_iqa_score(os.fspath(path))
         print("torch", path.name, d)
         # with Image.open(path) as img:
         #    score = brisque.score(img)

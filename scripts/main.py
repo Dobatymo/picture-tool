@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import piexif
+from genutility.filesystem import scandir_ext
 from genutility.pillow import NoActionNeeded, fix_orientation, write_text
 from PIL import Image
 
-from picturetool.utils import get_exif_dates
+from picturetool.utils import extensions_jpeg, get_exif_dates
 
 logger = logging.getLogger(__name__)
 
@@ -184,8 +185,9 @@ def main():
     DEFAULT_QUALITY = 90
 
     parser = GooeyParser(formatter_class=ArgumentDefaultsHelpFormatter)
-    parser.add_argument("path", type=is_dir, help="Directory with .jpg files", widget="DirChooser")
+    parser.add_argument("path", type=is_dir, help="Directory with image files", widget="DirChooser")
 
+    parser.add_argument("--extensions", nargs="+", default=extensions_jpeg)
     parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively.")
     parser.add_argument("-q", "--quality", type=int, default=DEFAULT_QUALITY, help="JPEG quality level.")
     parser.add_argument(
@@ -243,21 +245,20 @@ def main():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    if args.recursive:
-        it = args.path.rglob("*.jpg")
-    else:
-        it = args.path.glob("*.jpg")
+    it = scandir_ext(args.path, args.extensions, rec=args.recursive)
 
-    suffix = ".pp.jpg"
+    suffix = ".pp"
 
     for entry in it:
-        outpath = entry.with_suffix(suffix)
+        path = Path(entry)
+        new_suffix = suffix + path.suffix
+        outpath = path.with_suffix(new_suffix)
 
-        if outpath.exists() or fspath(entry).endswith(suffix):
+        if outpath.exists() or path.suffix == new_suffix:
             logger.warning("Skipping %s (already exists)", entry)
         else:
             try:
-                if mod_image(entry, outpath, args, args.quality, args.move):
+                if mod_image(path, outpath, args, args.quality, args.move):
                     logger.info("Saved %s", outpath)
                 else:
                     logger.info("Unmodified %s", outpath)
