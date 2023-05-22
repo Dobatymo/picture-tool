@@ -12,6 +12,7 @@ import torch
 import transformers
 from genutility.args import is_dir
 from genutility.file import StdoutFile
+from genutility.filesystem import scandir_ext
 from genutility.iter import batch
 from PIL import Image
 from torchvision.transforms import functional as F
@@ -21,7 +22,7 @@ from transformers.models.vit.feature_extraction_vit import ViTFeatureExtractor
 from transformers.models.vit.modeling_vit import ViTModel
 
 from picturetool.ml_utils import faiss_duplicates_threshold, faiss_to_pairs
-from picturetool.utils import CollectingIterable, ThreadedIterator
+from picturetool.utils import CollectingIterable, ThreadedIterator, extensions
 
 DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
 
@@ -60,7 +61,7 @@ def extract_embeddings(
 def find_dups_ml(
     path: Path, vit_model: str, batchsize: int = 100, verbose: bool = False
 ) -> Tuple[List[Path], np.ndarray]:
-    paths = CollectingIterable(path.rglob("*.jpg"))
+    paths = CollectingIterable(map(Path, scandir_ext(path, extensions)))
 
     threshold = 1.0
     num_threads = (os.cpu_count() or 2) - 1

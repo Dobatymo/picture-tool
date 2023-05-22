@@ -108,6 +108,13 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         else:
             set_reference_unchecked(df)
 
+        if "overwrite" not in df:
+            df["overwrite"] = pd.Series([{} for i in range(len(df))], dtype=object).values
+        else:
+            from ast import literal_eval
+            df["overwrite"] = df["overwrite"].apply(literal_eval) # json.loads would be better, but to_csv also doesn't use json
+            assert df.loc[df.priority > 0, "overwrite"].str.len().sum() == 0, "Loaded file contains overwrite information for non-reference files"
+
         self.set_df(df)
 
         num_files = len(df)
@@ -131,6 +138,12 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
 
         self.set_reference_by_file(group, path)
         self.row_reference.emit(group, path)
+
+    def set_path_reference(self, row_idx: int) -> None:
+        row = self.df.iloc[row_idx]
+        group = row.name.item()
+
+        self.df.loc[group].iloc[0]["overwrite"]["path"] = row["path"]
 
     def _get_iloc_by(self, group: int, key: str, value: Any) -> int:
         idx = (self.df.loc[group][key] == value).astype("bool")  # without the cast it's 'boolean'
@@ -335,6 +348,9 @@ class GroupedPictureView(QtWidgets.QTableView):
         self.model().set_checked(index.row(), False)
         self.model().set_reference(index.row())
 
+    def set_path_reference(self, index: QtCore.QModelIndex) -> None:
+        self.model().set_path_reference(index.row())
+
     def open_directory(self, index: QtCore.QModelIndex) -> None:
         path = self.get_row_by_index(index)["path"]
         show_in_file_manager(path)
@@ -346,7 +362,8 @@ class GroupedPictureView(QtWidgets.QTableView):
         if not index.isValid():
             return
 
-        is_reference = self.get_row_by_index(index)["priority"] == 0
+        row = self.get_row_by_index(index)
+        is_reference = row["priority"] == 0
 
         open_file_action = QtWidgets.QAction("Open file", self)
         open_file_action.triggered.connect(lambda checked: self.open_file(index))
@@ -358,10 +375,14 @@ class GroupedPictureView(QtWidgets.QTableView):
         reference_action.setEnabled(not is_reference)
         reference_action.triggered.connect(lambda checked: self.make_reference(index))
 
+        path_reference_action = QtWidgets.QAction("Set path reference", self)
+        path_reference_action.triggered.connect(lambda checked: self.set_path_reference(index))
+
         contextMenu = QtWidgets.QMenu(self)
         contextMenu.addAction(open_file_action)
         contextMenu.addAction(open_directory_action)
         contextMenu.addAction(reference_action)
+        contextMenu.addAction(path_reference_action)
         contextMenu.exec_(event.globalPos())
 
 
@@ -1044,7 +1065,13 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument("--in-path", type=is_file, help="Allowed file types are csv, parquet and json")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Log additional information useful for debugging")
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
 
     app = QtWidgets.QApplication([])
 

@@ -51,14 +51,14 @@ from picturetool.utils import (
     DEFAULT_APPDATA_DIR,
     DEFAULT_HASHDB,
     HashDB,
+    extensions,
+    extensions_heif,
     get_exif_dates,
     hamming_duplicates_chunk,
     make_groups,
     npmp_to_pairs,
 )
 
-HEIF_EXTENSIONS = (".heic", ".heif")
-JPEG_EXTENSIONS = (".jpg", ".jpeg")
 Shape = Tuple[int, ...]
 
 
@@ -191,7 +191,7 @@ def scandir_error_log_warning(entry: os.DirEntry, exception) -> None:
 
 
 def initializer_worker(extensions: Collection[str]) -> None:
-    if set(HEIF_EXTENSIONS) & set(extensions):
+    if set(extensions_heif) & set(extensions):
         from pillow_heif import register_heif_opener
 
         register_heif_opener()
@@ -495,7 +495,7 @@ def main() -> None:
     except FileNotFoundError:
         default_config = {}
 
-    DEFAULT_EXTENSIONS = JPEG_EXTENSIONS + HEIF_EXTENSIONS + (".png", ".webp")
+    DEFAULT_EXTENSIONS = extensions
     DEFAULT_NORMALIZATION_OPS = ("orientation", "resolution", "colors")
     DEFAULT_NORMALIZED_RESOLUTION = (256, 256)
     DEFAULT_PARALLEL_READ = multiprocessing.cpu_count()

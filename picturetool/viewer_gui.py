@@ -24,6 +24,7 @@ from .shared_gui import (
     _grayscale,
     read_qt_image,
 )
+from .utils import extensions
 
 T = TypeVar("T")
 
@@ -149,7 +150,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     loaded: Optional[dict]
     path_idx: int
 
-    extensions = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp", ".tif", ".tiff"}
+    extensions = extensions
     cache_size = 10
     deleted_subdir = "deleted"
     delete_mode = "move-to-subdir"

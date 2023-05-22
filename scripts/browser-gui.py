@@ -11,6 +11,7 @@ from filemeta.exif import exif_table
 from genutility.cache import cache
 from genutility.exceptions import NoResult
 from genutility.filesdb import FileDbSimple
+from genutility.filesystem import scandir_ext
 from genutility.pillow import exifinfo
 from geopy.distance import distance as geodistance
 from geopy.geocoders import Nominatim
@@ -37,11 +38,13 @@ from PySide2.QtWidgets import (
     QWidget,
 )
 
-from picturetool.utils import parse_gpsinfo
+from picturetool.utils import extensions, parse_gpsinfo
 
 APP_NAME = "Photo manager"
 APP_ID = "photo-manager"
 PLACEHOLDER_PATH = "data/placeholder.png"
+
+ThumbsQueueT = "Queue[Union[str, Tuple[QListWidgetItem, Path]]]"
 
 
 def icon_from_data(data: bytes) -> QIcon:
@@ -66,7 +69,7 @@ class ThumbnailDB(FileDbSimple):
 class ThumbnailWorker(QThread):
     signal = Signal(QListWidgetItem, QIcon)
 
-    def __init__(self, db: ThumbnailDB, q: Queue, size: Tuple[int, int]) -> None:
+    def __init__(self, db: ThumbnailDB, q: ThumbsQueueT, size: Tuple[int, int]) -> None:
         QThread.__init__(self)
         self.db = db
         self.q = q
@@ -146,7 +149,7 @@ class PhotoListWidget(QListWidget):
         with open(PLACEHOLDER_PATH, "rb") as fr:
             self.placeholder_icon = icon_from_data(fr.read())
 
-        self.thumbsqueue = Queue()
+        self.thumbsqueue: ThumbsQueueT = Queue()
         self.thumbsthread = ThumbnailWorker(self.db, self.thumbsqueue, iconsize)
         self.thumbsthread.signal.connect(self.thumbs_signal_handler)
         self.thumbsthread.start()
@@ -272,7 +275,8 @@ class PhotoListWidget(QListWidget):
             return
 
         self.clear()
-        for path in basepath.glob("*.jpg"):
+        for _path in scandir_ext(basepath, extensions):
+            path = Path(_path)
             try:
                 data = self.get_thumb_from_db(path)
                 item = self.addItemFromData(path, data)
@@ -358,7 +362,8 @@ class MyWidget(QWidget):
 
     def load_path_location(self, lat, lon) -> None:
         def asd() -> Iterator[Tuple[float, Path]]:
-            for path in self.basepath.rglob("*.jpg"):
+            for entry in scandir_ext(self.basepath, extensions):
+                path = Path(entry)
                 with Image.open(os.fspath(path)) as img:
                     info = exifinfo(img)
                     try:

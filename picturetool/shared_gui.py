@@ -117,9 +117,12 @@ def read_qt_image(
 
             try:
                 img = fix_orientation(img, exif)
-                meta["transforms"].append("rotate")
             except (NoActionNeeded, KeyError):
                 pass
+            except ValueError as e:
+                logger.warning("Could not fix orientation of <%s>. %s", path, e)
+            else:
+                meta["transforms"].append("rotate")
 
             meta.update(
                 {
