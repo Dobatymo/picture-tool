@@ -112,8 +112,13 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
             df["overwrite"] = pd.Series([{} for i in range(len(df))], dtype=object).values
         else:
             from ast import literal_eval
-            df["overwrite"] = df["overwrite"].apply(literal_eval) # json.loads would be better, but to_csv also doesn't use json
-            assert df.loc[df.priority > 0, "overwrite"].str.len().sum() == 0, "Loaded file contains overwrite information for non-reference files"
+
+            df["overwrite"] = df["overwrite"].apply(
+                literal_eval
+            )  # json.loads would be better, but to_csv also doesn't use json
+            assert (
+                df.loc[df.priority > 0, "overwrite"].str.len().sum() == 0
+            ), "Loaded file contains overwrite information for non-reference files"
 
         self.set_df(df)
 

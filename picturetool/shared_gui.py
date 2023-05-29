@@ -1,8 +1,11 @@
 import logging
+import os
 from copy import deepcopy
 from fractions import Fraction
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+import jpegtran
 import piexif
 from genutility.pillow import NoActionNeeded, fix_orientation
 from PIL import Image
@@ -12,6 +15,21 @@ from PySide2 import QtCore, QtGui, QtWidgets
 register_heif_opener()
 
 logger = logging.getLogger(__name__)
+
+
+def patch_jpegtran():
+    def _get_transformoptions_new(self, perfect=True, trim=False):
+        return self._get_transformoptions_old(perfect, trim)
+
+    jpegtran.lib.Transformation._get_transformoptions_old = jpegtran.lib.Transformation._get_transformoptions
+    jpegtran.lib.Transformation._get_transformoptions = _get_transformoptions_new
+
+
+patch_jpegtran()
+
+
+class ImperfectTransform(Exception):
+    pass
 
 
 class QPixmapWithMeta:
@@ -110,7 +128,10 @@ def read_qt_image(
     }
 
     with Image.open(path) as img:
-        meta: Dict[str, Any] = {"transforms": []}
+        meta: Dict[str, Any] = {
+            "transforms": [],
+            "format": img.format,
+        }
 
         if "exif" in img.info:
             exif = piexif.load(img.info["exif"])
@@ -459,3 +480,81 @@ def _equalize_hist_skimage(img: Image.Image) -> Image.Image:
 
 def _grayscale(img: Image.Image) -> Image.Image:
     return img.convert("L")
+
+
+def _load_jpegtran(path: Path) -> jpegtran.JPEGImage:
+    img = jpegtran.JPEGImage(os.fspath(path))
+
+    if img.exif_orientation is not None:
+        try:
+            img = img.exif_autotransform()
+        except Exception as e:
+            if e.args[0] == "Transformation failed: b'tj3Transform(): Transform is not perfect'":
+                raise ImperfectTransform("Perfectly lossless rotation not possible")
+            raise
+
+    return img
+
+
+def crop_half_save(path: Path, target: str) -> None:
+    img = _load_jpegtran(path)
+    outpath = path.with_suffix(f".cropped{path.suffix}")
+    if outpath.exists():
+        raise FileExistsError(outpath)
+
+    if target == "top":
+        x = 0
+        y = img.height // 2
+        y -= y % 16
+        width = img.width
+        height = img.height - y
+    elif target == "bottom":
+        x = 0
+        y = 0
+        width = img.width
+        height = img.height // 2
+    elif target == "left":
+        x = img.width // 2
+        x -= x % 16
+        y = 0
+        width = img.width - x
+        height = img.height
+    elif target == "right":
+        x = 0
+        y = 0
+        width = img.width // 2
+        height = img.height
+    else:
+        raise ValueError(f"Unsupported target: {target}")
+
+    try:
+        img = img.crop(x, y, width, height)
+    except Exception as e:
+        if e.args[0] == "Transformation failed: b'tj3Transform(): Transform is not perfect'":
+            raise ImperfectTransform("Perfectly lossless crop not possible")
+        raise
+
+    img.save(os.fspath(outpath))
+
+
+def rotate_save(path: Path, target: str) -> None:
+    img = _load_jpegtran(path)
+    outpath = path.with_suffix(f".rotated{path.suffix}")
+    if outpath.exists():
+        raise FileExistsError(outpath)
+
+    if target == "cw":
+        angle = 90
+    elif target == "ccw":
+        angle = -90
+    else:
+        raise ValueError(f"Unsupported target: {target}")
+
+    try:
+        img = img.rotate(angle)
+    except Exception as e:
+        if e.args[0] == "Transformation failed: b'tj3Transform(): Transform is not perfect'":
+            raise ImperfectTransform("Perfectly lossless rotation not possible")
+        raise
+
+    img.save(os.fspath(outpath))
