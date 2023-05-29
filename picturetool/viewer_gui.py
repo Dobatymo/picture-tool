@@ -17,12 +17,15 @@ from PySide2 import QtCore, QtGui, QtWidgets
 
 from .shared_gui import (
     ImageTransformT,
+    ImperfectTransform,
     PixmapViewer,
     QImageWithBuffer,
     QSystemTrayIconWithMenu,
     _equalize_hist_skimage,
     _grayscale,
+    crop_half_save,
     read_qt_image,
+    rotate_save,
 )
 from .utils import extensions
 
@@ -212,13 +215,13 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.button_fit_to_window.setStatusTip("Resize picture to fit to window")
         self.button_fit_to_window.triggered[bool].connect(self.on_fit_to_window)
 
-        button_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
-        button_rotate_cw.setStatusTip("Rotate picture clockwise (view only)")
-        button_rotate_cw.triggered.connect(self.on_rotate_cw)
+        button_view_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
+        button_view_rotate_cw.setStatusTip("Rotate picture clockwise (view only)")
+        button_view_rotate_cw.triggered.connect(self.on_view_rotate_cw)
 
-        button_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
-        button_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
-        button_rotate_ccw.triggered.connect(self.on_rotate_ccw)
+        button_view_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
+        button_view_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
+        button_view_rotate_ccw.triggered.connect(self.on_view_rotate_ccw)
 
         button_grayscale = QtWidgets.QAction("&Grayscale", self)
         button_grayscale.setCheckable(True)
@@ -239,6 +242,22 @@ class PictureWindow(QtWidgets.QMainWindow):
         )
         button_equalize.triggered[bool].connect(self.on_filter_equalize)
 
+        button_crop_bottom = QtWidgets.QAction("&Crop bottom half", self)
+        button_crop_bottom.setStatusTip("Losslessly crop away the bottom half of the image (create new file)")
+        button_crop_bottom.triggered[bool].connect(self.on_crop_bottom)
+
+        button_crop_top = QtWidgets.QAction("&Crop top half", self)
+        button_crop_top.setStatusTip("Losslessly crop away the top half of the image (create new file)")
+        button_crop_top.triggered[bool].connect(self.on_crop_top)
+
+        button_edit_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
+        button_edit_rotate_cw.setStatusTip("Losslessly rotate picture clockwise (create new file)")
+        button_edit_rotate_cw.triggered.connect(self.on_edit_rotate_cw)
+
+        button_edit_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
+        button_edit_rotate_ccw.setStatusTip("Losslessly rotate picture counter-clockwise (create new file)")
+        button_edit_rotate_ccw.triggered.connect(self.on_edit_rotate_ccw)
+
         menu = self.menuBar()
         file_menu = menu.addMenu("&File")
         file_menu.menuAction().setStatusTip("Basic app operations")
@@ -249,14 +268,21 @@ class PictureWindow(QtWidgets.QMainWindow):
         view_menu = menu.addMenu("&View")
         view_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
         view_menu.addAction(self.button_fit_to_window)
-        view_menu.addAction(button_rotate_cw)
-        view_menu.addAction(button_rotate_ccw)
+        view_menu.addAction(button_view_rotate_cw)
+        view_menu.addAction(button_view_rotate_ccw)
 
         filters_menu = menu.addMenu("&Filters")
         filters_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
         filters_menu.addAction(button_grayscale)
         filters_menu.addAction(button_autocontrast)
         filters_menu.addAction(button_equalize)
+
+        edit_menu = menu.addMenu("&Edit")
+        edit_menu.menuAction().setStatusTip("Actions here save an edited version of the file to disk")
+        edit_menu.addAction(button_crop_bottom)
+        edit_menu.addAction(button_crop_top)
+        edit_menu.addAction(button_edit_rotate_cw)
+        edit_menu.addAction(button_edit_rotate_ccw)
 
         self.cache = PictureCache(self.cache_size)
         self.cache.pic_loaded.connect(self.on_pic_loaded)
@@ -499,13 +525,13 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.activateWindow()
 
     @QtCore.Slot()
-    def on_rotate_cw(self) -> None:
+    def on_view_rotate_cw(self) -> None:
         tr = QtGui.QTransform()
         tr.rotate(90)
         self.viewer.label.transform(tr, "rotate")
 
     @QtCore.Slot()
-    def on_rotate_ccw(self) -> None:
+    def on_view_rotate_ccw(self) -> None:
         tr = QtGui.QTransform()
         tr.rotate(-90)
         self.viewer.label.transform(tr, "rotate")
@@ -533,6 +559,62 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             self.cache.process.remove(_equalize_hist_skimage)
         self.reload()
+
+    @QtCore.Slot()
+    def on_crop_bottom(self) -> None:
+        pm = self.viewer.label.pm
+        path = self.loaded["path"]
+        if pm is not None:
+            format = pm.meta["format"]
+            assert format == "JPEG", format
+            try:
+                crop_half_save(path, "bottom")
+            except (ImperfectTransform, FileExistsError) as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Cropping picture failed", f"Cropping <{path}> failed. {type(e).__name__}: {e}"
+                )
+
+    @QtCore.Slot()
+    def on_crop_top(self) -> None:
+        pm = self.viewer.label.pm
+        path = self.loaded["path"]
+        if pm is not None:
+            format = pm.meta["format"]
+            assert format == "JPEG", format
+            try:
+                crop_half_save(path, "top")
+            except (ImperfectTransform, FileExistsError) as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Cropping picture failed", f"Cropping <{path}> failed. {type(e).__name__}: {e}"
+                )
+
+    @QtCore.Slot()
+    def on_edit_rotate_cw(self) -> None:
+        pm = self.viewer.label.pm
+        path = self.loaded["path"]
+        if pm is not None:
+            format = pm.meta["format"]
+            assert format == "JPEG", format
+            try:
+                rotate_save(path, "cw")
+            except (ImperfectTransform, FileExistsError) as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Rotating picture failed", f"Rotating <{path}> failed. {type(e).__name__}: {e}"
+                )
+
+    @QtCore.Slot()
+    def on_edit_rotate_ccw(self) -> None:
+        pm = self.viewer.label.pm
+        path = self.loaded["path"]
+        if pm is not None:
+            format = pm.meta["format"]
+            assert format == "JPEG", format
+            try:
+                rotate_save(path, "ccw")
+            except (ImperfectTransform, FileExistsError) as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Rotating picture failed", f"Rotating <{path}> failed. {type(e).__name__}: {e}"
+                )
 
     @QtCore.Slot(bool)
     def on_fit_to_window(self, checked: bool) -> None:
