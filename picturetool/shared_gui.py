@@ -1,12 +1,12 @@
 import logging
-import os
 from copy import deepcopy
 from fractions import Fraction
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-import jpegtran
 import piexif
+import turbojpeg
 from genutility.pillow import NoActionNeeded, fix_orientation
 from PIL import Image
 from pillow_heif import register_heif_opener
@@ -15,17 +15,6 @@ from PySide2 import QtCore, QtGui, QtWidgets
 register_heif_opener()
 
 logger = logging.getLogger(__name__)
-
-
-def patch_jpegtran():
-    def _get_transformoptions_new(self, perfect=True, trim=False):
-        return self._get_transformoptions_old(perfect, trim)
-
-    jpegtran.lib.Transformation._get_transformoptions_old = jpegtran.lib.Transformation._get_transformoptions
-    jpegtran.lib.Transformation._get_transformoptions = _get_transformoptions_new
-
-
-patch_jpegtran()
 
 
 class ImperfectTransform(Exception):
@@ -482,79 +471,119 @@ def _grayscale(img: Image.Image) -> Image.Image:
     return img.convert("L")
 
 
-def _load_jpegtran(path: Path) -> jpegtran.JPEGImage:
-    img = jpegtran.JPEGImage(os.fspath(path))
-
-    if img.exif_orientation is not None:
-        try:
-            img = img.exif_autotransform()
-        except Exception as e:
-            if e.args[0] == "Transformation failed: b'tj3Transform(): Transform is not perfect'":
-                raise ImperfectTransform("Perfectly lossless rotation not possible")
-            raise
+def _tj_fix_orientation(img: bytes, orientation: int, perfect: bool = True) -> bytes:
+    if orientation == 1:
+        raise NoActionNeeded("File already properly rotated")
+    elif orientation == 2:
+        img = turbojpeg.transform(img, turbojpeg.OP.HFLIP, perfect=perfect)
+    elif orientation == 3:
+        img = turbojpeg.transform(img, turbojpeg.OP.ROT180, perfect=perfect)
+    elif orientation == 4:
+        img = turbojpeg.transform(img, turbojpeg.OP.VFLIP, perfect=perfect)
+    elif orientation == 5:
+        img = turbojpeg.transform(img, turbojpeg.OP.TRANSPOSE, perfect=perfect)
+    elif orientation == 6:
+        img = turbojpeg.transform(img, turbojpeg.OP.ROT90, perfect=perfect)
+    elif orientation == 7:
+        img = turbojpeg.transform(img, turbojpeg.OP.TRANSVERSE, perfect=perfect)
+    elif orientation == 8:
+        img = turbojpeg.transform(img, turbojpeg.OP.ROT270, perfect=perfect)
+    else:
+        raise ValueError(f"Unsupported orientation: {orientation}")
 
     return img
 
 
+def tj_fix_orientation(img: bytes, exif: dict, perfect: bool = True) -> bytes:
+    orientation = exif["0th"][piexif.ImageIFD.Orientation]
+    img = _tj_fix_orientation(img, orientation, perfect)
+    exif["0th"][piexif.ImageIFD.Orientation] = 1
+
+    return img
+
+
+def jpeg_fix_orientation(data: bytes, perfect: bool = True) -> bytes:
+    exif = piexif.load(data)
+    try:
+        with BytesIO() as out:
+            data = tj_fix_orientation(data, exif, perfect)
+            piexif.insert(piexif.dump(exif), data, out)
+            data = out.getvalue()
+    except NoActionNeeded:
+        pass
+    except KeyError:
+        pass
+    except ValueError:
+        pass
+    return data
+
+
 def crop_half_save(path: Path, target: str) -> None:
-    img = _load_jpegtran(path)
+    img = path.read_bytes()
+
     outpath = path.with_suffix(f".cropped{path.suffix}")
     if outpath.exists():
         raise FileExistsError(outpath)
 
+    img = jpeg_fix_orientation(img)
+    info = turbojpeg.decompress_header(img)
+
     if target == "top":
         x = 0
-        y = img.height // 2
+        y = info["height"] // 2
         y -= y % 16
-        width = img.width
-        height = img.height - y
+        width = info["width"]
+        height = info["height"] - y
     elif target == "bottom":
         x = 0
         y = 0
-        width = img.width
-        height = img.height // 2
+        width = info["width"]
+        height = info["height"] // 2
     elif target == "left":
-        x = img.width // 2
+        x = info["width"] // 2
         x -= x % 16
         y = 0
-        width = img.width - x
-        height = img.height
+        width = info["width"] - x
+        height = info["height"]
     elif target == "right":
         x = 0
         y = 0
-        width = img.width // 2
-        height = img.height
+        width = info["width"] // 2
+        height = info["height"]
     else:
         raise ValueError(f"Unsupported target: {target}")
 
     try:
-        img = img.crop(x, y, width, height)
-    except Exception as e:
-        if e.args[0] == "Transformation failed: b'tj3Transform(): Transform is not perfect'":
+        img = turbojpeg.transform(img, crop=True, x=x, y=y, w=width, h=height)
+    except RuntimeError as e:
+        if e.args[0] == "tj3Transform(): Transform is not perfect":
             raise ImperfectTransform("Perfectly lossless crop not possible")
         raise
 
-    img.save(os.fspath(outpath))
+    outpath.write_bytes(img)
 
 
 def rotate_save(path: Path, target: str) -> None:
-    img = _load_jpegtran(path)
+    img = path.read_bytes()
+
     outpath = path.with_suffix(f".rotated{path.suffix}")
     if outpath.exists():
         raise FileExistsError(outpath)
 
+    img = jpeg_fix_orientation(img)
+
     if target == "cw":
-        angle = 90
+        op = turbojpeg.OP.ROT90
     elif target == "ccw":
-        angle = -90
+        op = turbojpeg.OP.ROT270
     else:
         raise ValueError(f"Unsupported target: {target}")
 
     try:
-        img = img.rotate(angle)
-    except Exception as e:
-        if e.args[0] == "Transformation failed: b'tj3Transform(): Transform is not perfect'":
+        img = turbojpeg.transform(img, op)
+    except RuntimeError as e:
+        if e.args[0] == "tj3Transform(): Transform is not perfect":
             raise ImperfectTransform("Perfectly lossless rotation not possible")
         raise
 
-    img.save(os.fspath(outpath))
+    outpath.write_bytes(img)
