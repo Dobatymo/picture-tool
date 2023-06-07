@@ -30,7 +30,6 @@ priority = "primary"
 
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
-platformdirs = ">=3.5.0"
 filemeta = ">=0.0.2"
 genutility = {version = ">=0.0.97", extras = ["filesdb", "numpy", "pickle", "pillow"]}
 humanize = ">=4.4.0"
@@ -44,6 +43,7 @@ pandasql = ">=0.7.3"
 piexif = ">=1.1.3"
 Pillow = ">=9.4.0"
 pillow-heif = ">=0.7.0"
+platformdirs = ">=3.5.0"
 pyarrow = ">=10.0.1"
 pyexiv2 = ">=2.7.1"
 python-dateutil = ">=2.8.2"
