@@ -339,7 +339,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                 self.paths = self._get_pic_paths(p)
                 self.path_idx = 0
             else:
-                raise ValueError("Path <{p}> is neither file nor directory")
+                raise ValueError(f"Path <{p}> is neither file nor directory")
         else:
             self.path_idx = 0
             self.paths = []
@@ -446,6 +446,11 @@ class PictureWindow(QtWidgets.QMainWindow):
                 assert False
         else:
             raise RuntimeError("Not implemented yet")
+
+    def refresh_folder(self) -> None:
+        if self.loaded is not None:
+            path: Path = self.loaded["path"]
+            self.load_pictures([path])
 
     @lru_cache(1000)
     def get_location(self, lat: Sequence[Fraction], lon: Sequence[Fraction]) -> Optional[str]:
@@ -631,6 +636,9 @@ class PictureWindow(QtWidgets.QMainWindow):
         if event.key() == QtCore.Qt.Key_Delete and event.modifiers() == QtCore.Qt.NoModifier:
             event.accept()
             self.delete_current()
+        elif event.key() == QtCore.Qt.Key_F5 and event.modifiers() == QtCore.Qt.NoModifier:
+            event.accept()
+            self.refresh_folder()
         elif event.key() == QtCore.Qt.Key_Left and event.modifiers() == QtCore.Qt.NoModifier:
             self.load_prev()
             event.accept()

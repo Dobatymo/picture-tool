@@ -1,8 +1,12 @@
 import logging
 import os.path
 import sys
+from logging.handlers import TimedRotatingFileHandler
 from multiprocessing.connection import Client
+from pathlib import Path
 from typing import Optional
+
+from platformdirs import user_log_dir
 
 APP_AUTHOR = "Dobatymo"
 APP_NAME = "picture-viewer"
@@ -43,11 +47,20 @@ if __name__ == "__main__":
 
     log_fmt = "%(asctime)s %(levelname)s:%(name)s:%(funcName)s:%(message)s"
 
+    filename = Path(user_log_dir(APP_NAME, APP_AUTHOR)) / "viewer-gui.log"
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    stream_handler = logging.StreamHandler()
+    file_handler = TimedRotatingFileHandler(filename, "midnight", encoding="utf-8", delay=True, utc=False)
+
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format=log_fmt)
+        logging.basicConfig(level=logging.DEBUG, format=log_fmt, handlers=[stream_handler, file_handler])
         logging.getLogger("PIL").setLevel(level=logging.INFO)
     else:
-        logging.basicConfig(level=logging.INFO, format=log_fmt)
+        logging.basicConfig(level=logging.INFO, format=log_fmt, handlers=[stream_handler, file_handler])
+
+    args.paths = [p.resolve(strict=True) for p in args.paths]
+
+    os.chdir(Path.home())
 
     try_send(APP_PIPE_NAME, vars(args))
 
@@ -57,6 +70,11 @@ if __name__ == "__main__":
     from PySide2 import QtCore, QtWidgets
 
     from picturetool.viewer_gui import PictureWindow, PyServer, WindowManager
+
+    def excepthook(exc_type, value, traceback):
+        logging.exception("Unhandled exception", exc_info=(exc_type, value, traceback))
+
+    sys.excepthook = excepthook
 
     wm = WindowManager(APP_NAME, PictureWindow)
     s = PyServer(APP_PIPE_NAME)
