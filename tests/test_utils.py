@@ -322,14 +322,16 @@ class TestUtils(MyTestCase):
 
         in_tz = timezone.utc
         truth = pd.to_datetime(
-            pd.Series(["1999-12-31 20:00:00", "2000-01-01 00:00:00.000001", "2000-01-01 00:00:00", ""])
+            pd.Series(["1999-12-31 20:00:00", "2000-01-01 00:00:00.000001", "2000-01-01 00:00:00", ""]),
+            format="ISO8601",
         )
         result = to_datetime(ds, in_tz, timezone.utc)
         pd.testing.assert_series_equal(truth, result)
 
         in_tz = timezone(timedelta(hours=10), name="test")
         truth = pd.to_datetime(
-            pd.Series(["1999-12-31 20:00:00", "2000-01-01 00:00:00.000001", "1999-12-31 14:00:00", ""])
+            pd.Series(["1999-12-31 20:00:00", "2000-01-01 00:00:00.000001", "1999-12-31 14:00:00", ""]),
+            format="ISO8601",
         )
         result = to_datetime(ds, in_tz, timezone.utc)
         pd.testing.assert_series_equal(truth, result)

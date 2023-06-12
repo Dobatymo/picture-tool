@@ -616,7 +616,6 @@ def rotate_save(path: Path, target: str) -> None:
 
     if target == "cw":
         op = turbojpeg.OP.ROT90
-
     elif target == "ccw":
         op = turbojpeg.OP.ROT270
     else:
