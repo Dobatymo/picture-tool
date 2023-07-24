@@ -16,11 +16,16 @@ import piexif
 from dateutil import tz
 from genutility.datetime import is_aware
 from genutility.filesdb import FileDbWithId
+from genutility.iter import progress
 from genutility.numpy import hamming_dist_packed
+from genutility.typing import SizedIterable
 from pandas._typing import ValueKeyFunc
 from platformdirs import user_data_dir
 
+from . import npmp
+
 T = TypeVar("T")
+Shape = Tuple[int, ...]
 
 APP_NAME = "picture-tool"
 APP_AUTHOR = "Dobatymo"
@@ -110,6 +115,79 @@ def l2squared_duplicates_chunk(
     diff = a_arr - b_arr
     dists = np.sum(diff * diff, axis=-1)
     return np.argwhere(dists <= threshold) + np.array(coords)
+
+
+def hamming_duplicates(
+    sharr: npmp.SharedNdarray, chunkshape: Shape, hamming_threshold: int
+) -> SizedIterable[np.ndarray]:
+    if len(sharr.shape) != 2 or sharr.dtype != np.uint8:
+        raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
+
+    a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
+    b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
+
+    return npmp.ChunkedParallel(
+        hamming_duplicates_chunk,
+        a_arr,
+        b_arr,
+        chunkshape,
+        backend="multiprocessing",
+        axis=-1,
+        hamming_threshold=hamming_threshold,
+    )
+
+
+def l2squared_duplicates(sharr: npmp.SharedNdarray, chunkshape: Shape, threshold: float) -> SizedIterable[np.ndarray]:
+    if len(sharr.shape) != 2:
+        raise ValueError("Input must be a list of hashes (2-dimensional array)")
+
+    a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
+    b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
+
+    return npmp.ChunkedParallel(
+        l2squared_duplicates_chunk, a_arr, b_arr, chunkshape, backend="multiprocessing", threshold=threshold
+    )
+
+
+def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
+    pos = 0
+    for buf in it:
+        size = len(buf)
+        buffer[pos : pos + size] = buf
+        pos += size
+
+
+def npmp_duplicates_threshold_pairs(
+    metric: str, hashes: Union[np.ndarray, List[bytes]], threshold: Union[int, float], chunksize: int, verbose: bool
+) -> np.ndarray:
+    # npmp.THREADPOOL_LIMIT = limit
+
+    if metric == "hamming":
+        if not isinstance(threshold, int):
+            raise TypeError()
+        if isinstance(hashes, np.ndarray):
+            sharr = npmp.SharedNdarray.from_array(hashes)
+        elif isinstance(hashes, list):
+            sharr = npmp.SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
+            buffer_fill(hashes, sharr.getbuffer())
+        else:
+            raise TypeError()
+        it = hamming_duplicates(sharr, (chunksize, chunksize), threshold)
+    elif metric == "l2-squared":
+        if not isinstance(threshold, float):
+            raise TypeError()
+        assert isinstance(hashes, np.ndarray)
+        sharr = npmp.SharedNdarray.from_array(hashes)
+        it = l2squared_duplicates(sharr, (chunksize, chunksize), threshold)
+    else:
+        raise ValueError(f"Invalid metric: {metric}")
+
+    if verbose:
+        it = progress(it, extra_info_callback=lambda total, length: "Matching hashes")
+
+    out = npmp_to_pairs(it)
+    del sharr
+    return out
 
 
 @total_ordering

@@ -40,11 +40,10 @@ from genutility.image import normalize_image_rotation
 from genutility.iter import progress
 from genutility.json import read_json
 from genutility.time import MeasureTime
-from genutility.typing import CsvWriter, SizedIterable
+from genutility.typing import CsvWriter
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from PIL.IptcImagePlugin import getiptcinfo
 
-from picturetool.npmp import ChunkedParallel, SharedNdarray
 from picturetool.utils import (
     APP_NAME,
     APP_VERSION,
@@ -54,12 +53,9 @@ from picturetool.utils import (
     extensions,
     extensions_heif,
     get_exif_dates,
-    hamming_duplicates_chunk,
     make_groups,
-    npmp_to_pairs,
+    npmp_duplicates_threshold_pairs,
 )
-
-Shape = Tuple[int, ...]
 
 
 def hash_file_hash(path: str) -> bytes:
@@ -197,26 +193,6 @@ def initializer_worker(extensions: Collection[str]) -> None:
         register_heif_opener()
 
 
-def hamming_duplicates(sharr: SharedNdarray, chunkshape: Shape, hamming_threshold: int) -> SizedIterable[np.ndarray]:
-    if len(sharr.shape) != 2 or sharr.dtype != np.uint8:
-        raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
-
-    a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
-    b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
-
-    return ChunkedParallel(
-        hamming_duplicates_chunk, a_arr, b_arr, chunkshape, axis=-1, hamming_threshold=hamming_threshold
-    )
-
-
-def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
-    pos = 0
-    for buf in it:
-        size = len(buf)
-        buffer[pos : pos + size] = buf
-        pos += size
-
-
 def maybe_decode(
     s: Optional[bytes], encoding: str = "ascii", context: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
@@ -318,7 +294,7 @@ def get_hash_func(mode: str, db: Optional[HashDB], overwrite_cache: bool, normal
     return hash_func
 
 
-HashResultT = Union[Dict[bytes, Set[str]], Tuple[List[bytes], List[str]]]
+HashResultT = Union[Dict[bytes, Set[str]], Tuple[List[str], List[bytes]]]
 
 
 def get_hashes(
@@ -460,18 +436,7 @@ def get_dupe_groups(
             assert len(paths) == len(hashes)
             if hashes:
                 hamming_threshold = 1
-
-                sharr = SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
-                buffer_fill(hashes, sharr.getbuffer())
-                del hashes
-
-                chunkshape = (chunksize, chunksize)
-                it = progress(
-                    hamming_duplicates(sharr, chunkshape, hamming_threshold),
-                    extra_info_callback=lambda total, length: "Matching hashes",
-                )
-                dups = npmp_to_pairs(it)
-                del sharr
+                dups = npmp_duplicates_threshold_pairs("hamming", hashes, hamming_threshold, chunksize, verbose=True)
                 dupgroups = [[paths[idx] for idx in indices] for indices in make_groups(dups)]
                 del dups
             else:

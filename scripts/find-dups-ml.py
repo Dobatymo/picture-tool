@@ -6,7 +6,6 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Iterable, Iterator, List, Tuple
 
-import faiss
 import numpy as np
 import torch
 import transformers
@@ -21,7 +20,7 @@ from transformers.image_utils import ImageFeatureExtractionMixin
 from transformers.models.vit.feature_extraction_vit import ViTFeatureExtractor
 from transformers.models.vit.modeling_vit import ViTModel
 
-from picturetool.ml_utils import faiss_duplicates_threshold, faiss_to_pairs
+from picturetool.ml_utils import faiss_duplicates_threshold_pairs
 from picturetool.utils import CollectingIterable, ThreadedIterator, extensions
 
 DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
@@ -58,6 +57,11 @@ def extract_embeddings(
     return features
 
 
+def generate_embeddings(model, extractor, pictures, verbose, batchsize):
+    for images in batch(tqdm(pictures, disable=not verbose), batchsize, list):
+        yield extract_embeddings(model, extractor, images)
+
+
 def find_dups_ml(
     path: Path, vit_model: str, batchsize: int = 100, verbose: bool = False
 ) -> Tuple[List[Path], np.ndarray]:
@@ -73,18 +77,10 @@ def find_dups_ml(
     model: ViTModel = transformers.AutoModel.from_pretrained(vit_model)
     model.eval()
 
-    hidden_dim = model.config.hidden_size
-
     pictures = ThreadedIterator(load_images(paths), batchsize)
-
-    index = faiss.IndexFlatL2(hidden_dim)
-    for images in batch(tqdm(pictures, disable=not verbose), batchsize, list):
-        embeddings = extract_embeddings(model, extractor, images)
-        index.add(embeddings)
-
+    it = generate_embeddings(model, extractor, pictures, verbose, batchsize)
+    pairs = faiss_duplicates_threshold_pairs("l2-squared", it, threshold, 1000, verbose=False)
     assert paths.exhausted
-
-    pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, 1000, threshold))
 
     return paths.collection, pairs
 

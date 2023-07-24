@@ -7,15 +7,15 @@ import dask.array as da
 import numpy as np
 from dask.diagnostics import ProgressBar
 from genutility.file import StdoutFile
-from genutility.iter import progress
 from genutility.time import MeasureTime
 from genutility.typing import SizedIterable
 from tqdm import tqdm
 
 from picturetool import npmp
-from picturetool.ml_utils import faiss_duplicates_threshold, faiss_duplicates_top_k, faiss_from_array, faiss_to_pairs
-from picturetool.utils import hamming_duplicates_chunk, l2squared_duplicates_chunk
+from picturetool.ml_utils import faiss_duplicates_threshold_pairs, faiss_duplicates_top_k_pairs
+from picturetool.utils import hamming_duplicates_chunk, l2squared_duplicates_chunk, npmp_duplicates_threshold_pairs
 from picturetool.utils_annoy import annoy_duplicates_top_k, annoy_from_array
+from picturetool.utils_numba import numba_duplicates_threshold_pairs
 
 
 def matmul_chunk(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -37,42 +37,14 @@ funcs_kwargs = {
     "matmul": {},
 }
 
-
-from numba import jit, optional
-from numba import types as t
-from numba_progress import ProgressBar as NumbaProgressBar  # pip install numba-progress
-from numba_progress.progress import progressbar_type
+THRESHOLD_L2 = 1.0
+THRESHOLD_HAMMING = 2
+TOP_K = 5
 
 
-@jit(
-    [
-        t.int64[:, ::1](t.float32[:, ::1], t.float32, optional(progressbar_type)),
-        t.int64[:, ::1](t.float32[:, ::], t.float32, optional(progressbar_type)),
-    ],
-    nopython=True,
-    nogil=True,
-    cache=True,
-    parallel=False,
-    fastmath=True,
-)
-def l2squared_duplicates_numba(arr: np.ndarray, threshold: float, progress: Optional[NumbaProgressBar]) -> np.ndarray:
-    coords = []
-    for i in range(arr.shape[0]):
-        for j in range(i + 1, arr.shape[0]):
-            diffs = arr[i] - arr[j]
-            norm = np.sum(diffs * diffs)
-            if norm <= threshold:
-                coords.append([i, j])
-        if progress is not None:
-            progress.update(1)
-    return np.array(coords)
-
-
-def task_numba(task: str, arr: np.ndarray, progress: Optional[NumbaProgressBar] = None) -> np.ndarray:
-    threshold = 1.0
-
+def task_numba(task: str, arr: np.ndarray) -> np.ndarray:
     if task == "l2-dups":
-        return l2squared_duplicates_numba(arr, threshold, progress)
+        return numba_duplicates_threshold_pairs("l2-squared", arr, THRESHOLD_L2)
     else:
         raise ValueError(f"Invalid task: {task}")
 
@@ -97,32 +69,22 @@ def task_python(task: str, arr: np.ndarray) -> np.ndarray:
 
 def task_faiss(task: str, arr: np.ndarray, chunksize: int) -> np.ndarray:
     if task == "l2-dups":
-        index = faiss_from_array(arr, "l2-squared")
-        pairs, dists = faiss_to_pairs(
-            faiss_duplicates_threshold(index, batchsize=chunksize, threshold=1.0, verbose=True)
-        )
-        return pairs
+        return faiss_duplicates_threshold_pairs("l2-squared", arr, THRESHOLD_L2, chunksize, verbose=True)
     elif task == "l2-top-k":
-        index = faiss_from_array(arr, "l2-squared")
-        pairs, dists = faiss_to_pairs(faiss_duplicates_top_k(index, batchsize=1000, top_k=5, verbose=True))
-        return pairs
+        return faiss_duplicates_top_k_pairs("l2-squared", arr, TOP_K, 1000, verbose=True)
     elif task == "binary-dups":
-        index = faiss_from_array(arr, "hamming")
-        pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, batchsize=chunksize, threshold=2, verbose=True))
-        return pairs
+        return faiss_duplicates_threshold_pairs("hamming", arr, THRESHOLD_HAMMING, chunksize, verbose=True)
     else:
         raise ValueError(f"Invalid task: {task}")
 
 
 def task_annoy(task: str, arr: np.ndarray) -> np.ndarray:
-    top_k = 5
     if task == "l2-dups":
         index = annoy_from_array(arr, "euclidean")
-        return annoy_duplicates_top_k(index, top_k)
-
+        return annoy_duplicates_top_k(index, TOP_K)
     elif task == "binary-dups":
         index = annoy_from_array(arr, "hamming")
-        return annoy_duplicates_top_k(index, top_k)
+        return annoy_duplicates_top_k(index, TOP_K)
     else:
         raise ValueError(f"Invalid task: {task}")
 
@@ -147,24 +109,13 @@ def task_npmt(task: str, arr: np.ndarray, chunksize: int, limit: Optional[int]) 
     )
 
 
-def task_npmp(task: str, sharr: npmp.SharedNdarray, chunksize: int, limit: Optional[int]) -> SizedIterable[np.ndarray]:
-    if len(sharr.shape) != 2:
-        raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
-
-    npmp.THREADPOOL_LIMIT = limit
-
-    a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
-    b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
-
-    return npmp.ChunkedParallel(
-        funcs[task],
-        a_arr,
-        b_arr,
-        (chunksize, chunksize),
-        backend="multiprocessing",
-        pass_coords=False,
-        **funcs_kwargs[task],
-    )
+def task_npmp(task: str, arr: np.ndarray, chunksize: int, limit: Optional[int]) -> SizedIterable[np.ndarray]:
+    if task == "l2-dups":
+        return npmp_duplicates_threshold_pairs("l2-squared", arr, THRESHOLD_L2, chunksize, verbose=True)
+    elif task == "binary-dups":
+        return npmp_duplicates_threshold_pairs("hamming", arr, THRESHOLD_HAMMING, chunksize, verbose=True)
+    else:
+        raise ValueError(f"Invalid task: {task}")
 
 
 def task_dask(task: str, np_arr: np.ndarray, chunksize: int):
@@ -206,16 +157,13 @@ def main(
             if engine == "python":
                 out = task_python(task, np_arr)
             elif engine == "numba":
-                with NumbaProgressBar(total=np_arr.shape[0]) as nb_progress:
-                    out = task_numba(task, np_arr, nb_progress)
+                out = task_numba(task, np_arr)
             elif engine == "numpy":
                 out = task_numpy(task, np_arr)
             elif engine == "npmt":
-                out = np.concatenate(list(progress(task_npmt(task, np_arr, chunksize, limit))))
+                out = task_npmt(task, np_arr, chunksize, limit)
             elif engine == "npmp":
-                out = np.concatenate(
-                    list(progress(task_npmp(task, npmp.SharedNdarray.from_array(np_arr), chunksize, limit)))
-                )
+                out = task_npmp(task, np_arr, chunksize, limit)
             elif engine == "dask":
                 with ProgressBar():
                     out = task_dask(task, np_arr, chunksize)
@@ -250,7 +198,7 @@ if __name__ == "__main__":
     parser.add_argument("--chunksize", type=int, default=CHUNKSIZE)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--threadpool-limit", type=int, default=None)
-    parser.add_argument("--task", choices=("l2-dups", "binary-dups"))
+    parser.add_argument("--task", choices=("l2-dups", "binary-dups", "matmul"))
     parser.add_argument(
         "--out",
         metavar="PATH",
