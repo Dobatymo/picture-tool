@@ -3,6 +3,7 @@ from typing import Iterable, Iterator, List, Tuple, Union, overload
 
 import faiss
 import numpy as np
+from more_itertools import spy
 from tqdm import tqdm
 
 from .utils import slice_idx
@@ -33,24 +34,42 @@ def _reconstruct_fixed(index: FaissIndexTypes, i0: int, ni: int) -> np.ndarray:
         return index.reconstruct_n(i0, ni)  # fixme: a preallocated array could be used here
 
 
-def faiss_from_array(arr: np.ndarray, norm: str) -> Union[faiss.IndexFlatL2, faiss.IndexBinaryFlat]:
-    if len(arr.shape) != 2:
-        raise ValueError("arr must be a 2-dim array")
+def faiss_from_array(
+    arr: Union[np.ndarray, Iterable[np.ndarray]], norm: str
+) -> Union[faiss.IndexFlatL2, faiss.IndexBinaryFlat]:
+    if isinstance(arr, np.ndarray):
+        arr = [arr]
+    elif isinstance(arr, list):
+        pass
+    else:
+        raise TypeError("arr must be np array ot iterable of np arrays")
+
+    head, it = spy(arr)
+
+    if not head:
+        raise ValueError("arr iterable cannot be empty")
 
     if norm == "l2-squared":
-        if arr.dtype != np.float32:
-            raise ValueError("arr must be of dtype float32")
-        index = faiss.IndexFlatL2(arr.shape[1])
+        index = faiss.IndexFlatL2(head[0].shape[1])
         assert FaissMetric(index.metric_type).name == "L2"
-        index.add(arr)
     elif norm == "hamming":
-        if arr.dtype != np.uint8:
-            raise ValueError("arr must be of dtype uint8")
-        index = faiss.IndexBinaryFlat(arr.shape[1] * 8)
+        index = faiss.IndexBinaryFlat(head[0].shape[1] * 8)
         assert index.metric_type == 1  # why?
-        index.add(arr)
     else:
         raise ValueError(f"Invalid norm: {norm}")
+
+    for batch in it:
+        if len(batch.shape) != 2:
+            raise ValueError("arr must be a 2-dim array")
+
+        if norm == "l2-squared":
+            if batch.dtype != np.float32:
+                raise ValueError("arr must be of dtype float32")
+            index.add(batch)
+        elif norm == "hamming":
+            if batch.dtype != np.uint8:
+                raise ValueError("arr must be of dtype uint8")
+            index.add(batch)
 
     return index
 
@@ -130,3 +149,23 @@ def faiss_to_pairs(it: Iterable[Tuple[int, int, float]]) -> Tuple[np.ndarray, np
         return np.array(pairs), np.array(dists)
     else:
         return np.empty(shape=(0, 2), dtype=np.int64), np.empty(shape=(0,), dtype=np.float32)
+
+
+def faiss_duplicates_threshold_pairs(
+    metric: str,
+    arr: Union[np.ndarray, Iterable[np.ndarray]],
+    threshold: Union[int, float],
+    chunksize: int,
+    verbose: bool,
+) -> np.ndarray:
+    index = faiss_from_array(arr, metric)
+    pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, threshold, verbose))
+    return pairs
+
+
+def faiss_duplicates_top_k_pairs(
+    metric: str, arr: Union[np.ndarray, Iterable[np.ndarray]], top_k: int, chunksize: int, verbose: bool
+) -> np.ndarray:
+    index = faiss_from_array(arr, metric)
+    pairs, dists = faiss_to_pairs(faiss_duplicates_top_k(index, chunksize, top_k, verbose))
+    return pairs
