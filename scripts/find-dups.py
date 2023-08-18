@@ -3,14 +3,14 @@ import hashlib
 import logging
 import multiprocessing
 import os
-from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+import sys
+from argparse import ArgumentParser
 from collections import defaultdict
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from datetime import timedelta
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
     Collection,
     Container,
     DefaultDict,
@@ -18,6 +18,7 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    NamedTuple,
     Optional,
     Set,
     Tuple,
@@ -37,12 +38,14 @@ from genutility.filesdb import NoResult
 from genutility.filesystem import entrysuffix, scandir_rec
 from genutility.hash import hash_file
 from genutility.image import normalize_image_rotation
-from genutility.iter import progress
 from genutility.json import read_json
-from genutility.time import MeasureTime
+from genutility.rich import Progress, get_double_format_columns
+from genutility.time import DeltaTime, MeasureTime
 from genutility.typing import CsvWriter
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from PIL.IptcImagePlugin import getiptcinfo
+from rich.progress import Progress as RichProgress
+from rich_argparse import ArgumentDefaultsRichHelpFormatter
 
 from picturetool.utils import (
     APP_NAME,
@@ -50,65 +53,76 @@ from picturetool.utils import (
     DEFAULT_APPDATA_DIR,
     DEFAULT_HASHDB,
     HashDB,
-    extensions,
     extensions_heif,
+    extensions_images,
     get_exif_dates,
     make_groups,
     npmp_duplicates_threshold_pairs,
 )
 
-
-def hash_file_hash(path: str) -> bytes:
-    return hash_file(path, hashlib.sha256).digest()  # 32bytes
-
-
-class hash_image_hash:
-    def __init__(self, normalize: Container[str], resolution: Tuple[int, int]) -> None:
-        self.normalize = normalize
-        self.resolution = resolution
-
-    def __call__(self, path: str) -> bytes:
-        with Image.open(path, "r") as img:
-            if "orientation" in self.normalize:
-                img_gray = ImageOps.grayscale(img)
-                img = Image.fromarray(normalize_image_rotation(np.asarray(img), np.asarray(img_gray)))
-            if "resolution" in self.normalize:
-                img = img.resize(self.resolution, resample=Image.Resampling.LANCZOS)
-            if "colors" in self.normalize:
-                img = img.filter(ImageFilter.SMOOTH)
-            img_bytes = np.asarray(img).tobytes()
-        m = hashlib.sha256()
-        m.update(img_bytes)
-        return m.digest()  # 32bytes
-
-
-def hash_phash(path: str) -> bytes:
-    with Image.open(path, "r") as img:
-        return bytes.fromhex(str(imagehash.phash(img, hash_size=16)))  # 32bytes
+COMMIT_PERIOD_SECONDS = 120.0
 
 
 class ImageError(Exception):
     pass
 
 
-class wrap:
-    def __init__(self, func: Callable[[str], bytes], colname: str) -> None:
-        self.func = func
-        self.colname = colname
+class MetaProvider:
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        raise NotImplementedError
 
     def get_cols(self) -> Tuple[str, ...]:
-        return (self.colname, "width", "height", "exif")
+        raise NotImplementedError
 
-    def _get_file_meta(self, path: Path) -> dict:
-        try:
-            img_hash = self.func(os.fspath(path))
-        except UnidentifiedImageError:
-            raise  # inherits from OSError, so must be re-raised explicitly
-        except OSError as e:
-            raise ImageError(path, e)
-        except ValueError as e:
-            raise ImageError(path, e)
+    def get_non_optional_cols(self) -> Tuple[str, ...]:
+        raise NotImplementedError
 
+    def get_meta(self, path: Path) -> Dict[str, Any]:
+        raise NotImplementedError
+
+
+class HashProvider:
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        raise NotImplementedError
+
+    def get_metric(self) -> str:
+        raise NotImplementedError
+
+    def get_col(self) -> str:
+        raise NotImplementedError
+
+    def get_hash(self, path: Path) -> bytes:
+        raise NotImplementedError
+
+
+class NoMetaProvider(MetaProvider):
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        pass
+
+    def get_cols(self) -> Tuple[str, ...]:
+        return ()
+
+    def get_non_optional_cols(self) -> Tuple[str, ...]:
+        return ()
+
+    def get_meta(self, path: Path) -> Dict[str, Any]:
+        return {}
+
+
+class ImageMetaProvider(MetaProvider):
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        if extensions is None or set(extensions_heif) & set(extensions):
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+
+    def get_cols(self) -> Tuple[str, ...]:
+        return ("width", "height", "exif", "icc_profile")
+
+    def get_non_optional_cols(self) -> Tuple[str, ...]:
+        return ("width", "height")
+
+    def get_meta(self, path: Path) -> Dict[str, Any]:
         with Image.open(path, "r") as img:
             width, height = img.size
             exif = img.info.get("exif", None)
@@ -129,7 +143,6 @@ class wrap:
             else:
                 photoshop = msgpack.packb(photoshop_, use_bin_type=True)
 
-        assert isinstance(img_hash, bytes)
         assert isinstance(width, int)
         assert isinstance(height, int)
         assert isinstance(exif, (bytes, type(None)))
@@ -138,7 +151,6 @@ class wrap:
         assert isinstance(photoshop, (bytes, type(None)))
 
         return {
-            self.colname: img_hash,
             "width": width,
             "height": height,
             "exif": exif,
@@ -148,27 +160,133 @@ class wrap:
         }
 
 
+class FileHashProvider(HashProvider):
+    def __init__(self, **kwargs) -> None:
+        pass
+
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        pass
+
+    def get_metric(self) -> str:
+        return "equivalence"
+
+    def get_col(self) -> str:
+        return "file_sha256"
+
+    def get_hash(self, path: Path) -> bytes:
+        return hash_file(path, hashlib.sha256).digest()
+
+
+class ImageHashProvider(HashProvider):
+    def __init__(self, *, normalize: Container[str], resolution: Tuple[int, int], **kwargs) -> None:
+        self.normalize = normalize
+        self.resolution = resolution
+
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        if extensions is None or set(extensions_heif) & set(extensions):
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+
+    def get_metric(self) -> str:
+        return "equivalence"
+
+    def get_col(self) -> str:
+        return "image_sha256"
+
+    def get_hash(self, path: Path) -> bytes:
+        with Image.open(path, "r") as img:
+            if "orientation" in self.normalize:
+                img_gray = ImageOps.grayscale(img)
+                img = Image.fromarray(normalize_image_rotation(np.asarray(img), np.asarray(img_gray)))
+            if "resolution" in self.normalize:
+                img = img.resize(self.resolution, resample=Image.Resampling.LANCZOS)
+            if "colors" in self.normalize:
+                img = img.filter(ImageFilter.SMOOTH)
+            img_bytes = np.asarray(img).tobytes()
+        m = hashlib.sha256()
+        m.update(img_bytes)
+
+        return m.digest()
+
+
+class PhashProvider(HashProvider):
+    def __init__(self, **kwargs) -> None:
+        pass
+
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        pass
+
+    def get_metric(self) -> str:
+        return "hamming"
+
+    def get_col(self) -> str:
+        return "phash"
+
+    def get_hash(self, path: Path) -> bytes:
+        with Image.open(path, "r") as img:
+            phash = bytes.fromhex(str(imagehash.phash(img, hash_size=16)))  # 32bytes
+
+        return phash
+
+
+class wrap:
+    def __init__(self, hash: HashProvider, meta: MetaProvider) -> None:
+        self.hash = hash
+        self.meta = meta
+
+    def initializer(self, extensions: Optional[Collection[str]]) -> None:
+        self.hash.initializer(extensions)
+        self.meta.initializer(extensions)
+
+    def _get_cols(self) -> Tuple[str, ...]:
+        return (self.hash.get_col(),) + self.meta.get_cols()
+
+    def _get_non_optional_cols(self) -> Tuple[str, ...]:
+        return (self.hash.get_col(),) + self.meta.get_non_optional_cols()
+
+    def _get_file_meta(self, path: Path) -> Dict[str, Any]:
+        try:
+            hash_bytes = self.hash.get_hash(path)
+        except UnidentifiedImageError:
+            raise  # inherits from OSError, so must be re-raised explicitly
+        except OSError as e:
+            raise ImageError(path, e)
+        except ValueError as e:
+            raise ImageError(path, e)
+
+        out = {
+            self.hash.get_col(): hash_bytes,
+        }
+        out.update(self.meta.get_meta(path))
+        return out
+
+
 class wrap_without_db(wrap):
-    def __call__(self, path: Path) -> Tuple[bool, Path, dict]:
+    def __call__(self, path: Path) -> Tuple[bool, Path, Dict[str, Any]]:
         cached = False
         meta = self._get_file_meta(path)
         return cached, path, meta
 
 
 class wrap_with_db(wrap):
-    def __init__(self, func: Callable[[str], bytes], colname: str, db: HashDB, overwrite: bool = False) -> None:
-        wrap.__init__(self, func, colname)
-        self.only = self.get_cols()
+    def __init__(self, hash: HashProvider, meta: MetaProvider, db: HashDB, overwrite: bool = False) -> None:
+        wrap.__init__(self, hash, meta)
+        self.only = self._get_cols()
         self.db = db
         self.overwrite = overwrite
 
-    def __call__(self, path: Path) -> Tuple[bool, Path, dict]:
+    def __call__(self, path: Path) -> Tuple[bool, Path, Dict[str, Any]]:
         try:
             if self.overwrite:
                 raise NoResult
-            values = self.db.get(path, only=self.only)
+            try:
+                values = self.db.get(path, only=self.only)
+            except OverflowError as e:
+                logging.error("Failed to query hash cache database for <%s>. OverflowError: %s", path, e)
+                raise NoResult
             meta = dict(zip(self.only, values))
-            if meta[self.colname] is None:
+            if any(meta[col] is None for col in self._get_non_optional_cols()):
                 raise NoResult
             cached = True
         except NoResult:
@@ -178,19 +296,12 @@ class wrap_with_db(wrap):
         return cached, path, meta
 
 
-hash_cols = {"file-hash": "file_sha256", "image-hash": "image_sha256", "phash": "phash"}
-hash_metrics = {"file-hash": "equivalence", "image-hash": "equivalence", "phash": "hamming"}
+hash_providers = {"file-hash": FileHashProvider, "image-hash": ImageHashProvider, "phash": PhashProvider}
+meta_providers = {"file-hash": NoMetaProvider, "image-hash": ImageMetaProvider, "phash": ImageMetaProvider}
 
 
 def scandir_error_log_warning(entry: os.DirEntry, exception) -> None:
     logging.warning("<%s> %s: %s", entry.path, type(exception).__name__, exception)
-
-
-def initializer_worker(extensions: Collection[str]) -> None:
-    if set(extensions_heif) & set(extensions):
-        from pillow_heif import register_heif_opener
-
-        register_heif_opener()
 
 
 def maybe_decode(
@@ -207,7 +318,7 @@ def maybe_decode(
             return s.decode("latin1")  # should never fail
 
 
-def notify(topic: str, message: str):
+def notify(topic: str, message: str) -> None:
     requests.post(
         "https://ntfy.sh/",
         json={
@@ -229,7 +340,11 @@ def write_dup(db: Optional[HashDB], fw: CsvWriter, i: int, path: Union[str, Path
         file_id, device_id, filesize, mod_date, width, height, exif = db.get(
             _path, only=("file_id", "device_id", "filesize", "mod_date", "width", "height", "exif")
         )
-        dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
+        try:
+            dt = datetime_from_utc_timestamp_ns(mod_date, aslocal=True)
+        except OSError:
+            # can happen for bad modification dates
+            dt = None
 
         if exif is None:
             exif_date_modified = None
@@ -258,7 +373,7 @@ def write_dup(db: Optional[HashDB], fw: CsvWriter, i: int, path: Union[str, Path
                 file_id,
                 device_id,
                 filesize,
-                dt.isoformat(),
+                dt.isoformat() if dt else None,
                 width,
                 height,
                 exif_date_modified.isoformat() if exif_date_modified else None,
@@ -277,179 +392,196 @@ def pathiter(directories: Iterable[Path], recursive: bool) -> Iterator[os.DirEnt
         yield from scandir_rec(directory, files=True, dirs=False, rec=recursive, errorfunc=scandir_error_log_warning)
 
 
-def get_hash_func(mode: str, db: Optional[HashDB], overwrite_cache: bool, normalize, resolution_normalized) -> wrap:
-    hash_funcs = {
-        "file-hash": hash_file_hash,
-        "image-hash": hash_image_hash(normalize, resolution_normalized),
-        "phash": hash_phash,
-    }
+def get_hash_func(
+    mode: str, db: Optional[HashDB], overwrite_cache: bool, hash_kwargs: Dict[str, Any], meta_kwargs: Dict[str, Any]
+) -> wrap:
+    hashprovider = hash_providers[mode](**hash_kwargs)
+    metaprovider = meta_providers[mode](**meta_kwargs)
 
-    hash_func = hash_funcs[mode]
-    colname = hash_cols[mode]
     if db is not None:
-        hash_func = wrap_with_db(hash_func, colname, db, overwrite_cache)
+        hash_func = wrap_with_db(hashprovider, metaprovider, db, overwrite_cache)
     else:
-        hash_func = wrap_without_db(hash_func, colname)
+        hash_func = wrap_without_db(hashprovider, metaprovider)
 
     return hash_func
 
 
-HashResultT = Union[Dict[bytes, Set[str]], Tuple[List[str], List[bytes]]]
+class HashResult(NamedTuple):
+    paths: List[str]
+    hashes: List[bytes]
 
 
 def get_hashes(
     directories: Iterable[Path],
     recursive: bool,
-    extensions,
     hash_func: wrap,
-    metric: str,
+    extensions: Optional[Collection[str]] = None,
     db: Optional[HashDB] = None,
     parallel_read: Optional[int] = None,
-) -> HashResultT:
-    if metric == "equivalence":
-        hash2paths: DefaultDict[bytes, Set[str]] = defaultdict(set)
-    elif metric == "hamming":
-        hashes: List[bytes] = []
-        paths: List[str] = []
-    else:
-        raise ValueError(f"Unsupported metric: {metric}")
+) -> HashResult:
+    paths: List[str] = []
+    hashes: List[bytes] = []
 
-    with ProcessPoolExecutor(
-        parallel_read, initializer=initializer_worker, initargs=(extensions,)
-    ) as executor, MeasureTime() as stopwatch:
+    with MeasureTime() as stopwatch, RichProgress(*get_double_format_columns()) as progress:
         futures: List[Future] = []
         cached: bool
         path: Path
         img_hash: bytes
         inodes: Dict[Tuple[int, int], Set[Path]] = {}
+        p = Progress(progress)
+        executor = ProcessPoolExecutor(parallel_read, initializer=hash_func.initializer, initargs=(extensions,))
 
-        for entry in progress(
-            pathiter(directories, recursive), extra_info_callback=lambda total, length: "Finding files"
-        ):
-            if entrysuffix(entry).lower() not in extensions:
-                continue
+        try:
+            for entry in p.track(pathiter(directories, recursive), description="Found {task.completed} files"):
+                if extensions is not None and entrysuffix(entry).lower() not in extensions:
+                    continue
 
-            path = Path(entry)
-            stats = path.stat()  # `entry.stat()` does not populate all fields on windows
+                path = Path(entry)
+                stats = path.stat()  # `entry.stat()` does not populate all fields on windows
 
-            assert stats.st_nlink > 0
+                assert stats.st_nlink > 0, path
 
-            if stats.st_nlink == 1:  # no other links
-                futures.append(executor.submit(hash_func, path))
-            else:
-                file_id = (stats.st_dev, stats.st_ino)
-                try:
-                    inodes[file_id].add(path)
-                except KeyError:
-                    # only scan if this inode group was encountered the first time
-                    inodes[file_id] = {path}
+                if stats.st_nlink == 1:  # no other links
                     futures.append(executor.submit(hash_func, path))
+                else:
+                    file_id = (stats.st_dev, stats.st_ino)
+                    try:
+                        inodes[file_id].add(path)
+                    except KeyError:
+                        # only scan if this inode group was encountered the first time
+                        inodes[file_id] = {path}
+                        futures.append(executor.submit(hash_func, path))
 
-        logging.info("Analyzing %d files", len(futures))
+            logging.info("Analyzing %d files", len(futures))
 
-        inodes = {k: paths for k, paths in inodes.items() if len(paths) > 1}
+            inodes = {k: paths for k, paths in inodes.items() if len(paths) > 1}
 
-        if inodes:
-            n_paths = sum(map(len, inodes.values()))
-            logging.warning(
-                "File collection resulted in %d groups of inodes which are referenced more than once, with a total of %d paths. Only the first encountered path will be considered for duplicate matching.",
-                len(inodes),
-                n_paths,
-            )
-        del inodes
+            if inodes:
+                n_paths = sum(map(len, inodes.values()))
+                logging.warning(
+                    "File collection resulted in %d groups of inodes which are referenced more than once, with a total of %d paths. Only the first encountered path will be considered for duplicate matching.",
+                    len(inodes),
+                    n_paths,
+                )
+            del inodes
 
-        num_cached = 0
-        num_fresh = 0
-        num_error = 0
-        for future in progress(
-            as_completed(futures), length=len(futures), extra_info_callback=lambda total, length: "Computing hashes"
-        ):
-            try:
-                cached, path, meta = future.result()
-            except ImageError as e:
-                _path = e.args[0]
-                _e = e.args[1]
-                logging.warning("%s <%s>: %s", type(_e).__name__, _path, _e)
-                num_error += 1
-                continue
-            except (UnidentifiedImageError, FileNotFoundError) as e:
-                logging.warning("%s: %s", type(e).__name__, e)
-                num_error += 1
-                continue
-            except MemoryError as e:
-                logging.error("%s: %s", type(e).__name__, e)
-                num_error += 1
-                continue
-            except Exception:
-                logging.exception("Failed to hash image file")
-                num_error += 1
-                continue
+            num_cached = 0
+            num_fresh = 0
+            num_error = 0
+            delta = DeltaTime()
+            for future in p.track(
+                as_completed(futures), total=len(futures), description="Computed {task.completed}/{task.total} hashes"
+            ):
+                try:
+                    cached, path, meta = future.result()
+                except ImageError as e:
+                    _path = e.args[0]
+                    _e = e.args[1]
+                    logging.warning("%s <%s>: %s", type(_e).__name__, _path, _e)
+                    num_error += 1
+                    continue
+                except (UnidentifiedImageError, FileNotFoundError) as e:
+                    logging.warning("%s: %s", type(e).__name__, e)
+                    num_error += 1
+                    continue
+                except MemoryError as e:
+                    logging.error("%s: %s", type(e).__name__, e)
+                    num_error += 1
+                    continue
+                except Exception:
+                    logging.exception("Failed to hash image file")
+                    num_error += 1
+                    continue
 
-            img_hash = meta[hash_func.colname]
-            rawpath = os.fspath(path)
+                if db is not None and not cached:
+                    if delta.get() > COMMIT_PERIOD_SECONDS:
+                        commit = True
+                        logging.debug("Committing hashes to database...")
+                    else:
+                        commit = False
+                    db.add(path, derived=meta, commit=commit, replace=False)
+                    if commit:
+                        delta.reset()
 
-            if db is not None and not cached:
-                db.add(path, derived=meta, commit=False, replace=False)
+                img_hash = meta[hash_func.hash.get_col()]
+                rawpath = os.fspath(path)
 
-            if metric == "equivalence":
-                hash2paths[img_hash].add(rawpath)
-            elif metric == "hamming":
                 paths.append(rawpath)
                 hashes.append(img_hash)
 
-            if cached:
-                num_cached += 1
-            else:
-                num_fresh += 1
+                if cached:
+                    num_cached += 1
+                else:
+                    num_fresh += 1
+        except KeyboardInterrupt:
+            logging.warning("Interrupted. Cancelling outstanding tasks and waiting for current tasks to finish.")
+            for future in futures:
+                future.cancel()
+            sys.exit(1)
+        except Exception:
+            logging.error("Error. Cancelling outstanding tasks and waiting for current tasks to finish.")
+            for future in futures:
+                future.cancel()
+            raise
+        finally:
+            time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+            logging.info(
+                "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d in %s",
+                num_cached,
+                num_fresh,
+                num_error,
+                time_delta,
+            )
+            try:
+                if db is not None:
+                    db.commit()
+            finally:
+                executor.shutdown()
 
-        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-        logging.info(
-            "Loaded %d hashes from cache, computed %d fresh ones and failed to read %d in %s",
-            num_cached,
-            num_fresh,
-            num_error,
-            time_delta,
-        )
-
-    if db is not None:
-        db.commit()
-
-    if metric == "equivalence":
-        return dict(hash2paths)
-    elif metric == "hamming":
-        return paths, hashes
+    return HashResult(paths, hashes)
 
 
 def get_dupe_groups(
-    metric: str, hash_result: HashResultT, chunksize, ntfy_topic: Optional[str] = None
+    metric: str, hash_result: HashResult, metric_kwargs: Dict[str, Any], chunksize, ntfy_topic: Optional[str] = None
 ) -> List[List[str]]:
     dupgroups: List[List[str]]
 
-    with MeasureTime() as stopwatch:
-        if metric == "equivalence":
-            hashes = hash_result
-            dupgroups = [list(paths) for digest, paths in hashes.items() if len(paths) > 1]
+    if len(hash_result.paths) != len(hash_result.hashes):
+        raise ValueError(
+            f"paths ({len(hash_result.paths)}) and hashes ({len(hash_result.hashes)}) of hash_result are of different lengths"
+        )
 
-        elif metric == "hamming":
-            paths, hashes = hash_result
-            del hash_result
-            assert len(paths) == len(hashes)
-            if hashes:
-                hamming_threshold = 1
-                dups = npmp_duplicates_threshold_pairs("hamming", hashes, hamming_threshold, chunksize, verbose=True)
-                dupgroups = [[paths[idx] for idx in indices] for indices in make_groups(dups)]
-                del dups
+    with MeasureTime() as stopwatch, RichProgress() as progress:
+        p = Progress(progress)
+
+        if hash_result.paths:
+            if metric == "equivalence":
+                hash2paths: DefaultDict[bytes, Set[str]] = defaultdict(set)
+                for rawpath, img_hash in zip(hash_result.paths, hash_result.hashes):
+                    hash2paths[img_hash].add(rawpath)
+                dupgroups = [list(paths) for digest, paths in hash2paths.items() if len(paths) > 1]
+            elif metric == "hamming":
+                hamming_threshold = metric_kwargs["hamming_threshold"]
+                dups = npmp_duplicates_threshold_pairs("hamming", hash_result.hashes, hamming_threshold, chunksize, p)
+                dupgroups = [[hash_result.paths[idx] for idx in indices] for indices in make_groups(dups)]
             else:
-                dupgroups = []
+                raise ValueError(f"Unsupported metric: {metric}")
         else:
-            raise ValueError(f"Unsupported metric: {metric}")
+            dupgroups = []
 
-        time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-        logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
-        if ntfy_topic:
-            notify(ntfy_topic, f"Found {len(dupgroups)} duplicate groups in {time_delta}")
+    time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+    logging.info("Found %s duplicate groups in %s", len(dupgroups), time_delta)
+    if ntfy_topic:
+        notify(ntfy_topic, f"Found {len(dupgroups)} duplicate groups in {time_delta}")
 
     return dupgroups
+
+
+extensions_mode = {
+    "file-hash": None,
+    "image-hash": extensions_images,
+    "phash": extensions_images,
+}
 
 
 def main() -> None:
@@ -460,21 +592,21 @@ def main() -> None:
     except FileNotFoundError:
         default_config = {}
 
-    DEFAULT_EXTENSIONS = extensions
     DEFAULT_NORMALIZATION_OPS = ("orientation", "resolution", "colors")
     DEFAULT_NORMALIZED_RESOLUTION = (256, 256)
-    DEFAULT_PARALLEL_READ = multiprocessing.cpu_count()
+    DEFAULT_PARALLEL_READ = max(multiprocessing.cpu_count() - 1, 1)
     DESCRIPTION = "Find picture duplicates"
+    DEFAULT_HAMMING_THRESHOLD = 1
 
-    parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter, description=DESCRIPTION)
+    parser = ArgumentParser(formatter_class=ArgumentDefaultsRichHelpFormatter, description=DESCRIPTION)
     parser.add_argument("directories", metavar="DIR", nargs="+", type=is_dir, help="Input directories")
     parser.add_argument(
         "--extensions",
         metavar=".EXT",
         nargs="+",
         type=suffix_lower,
-        default=DEFAULT_EXTENSIONS,
-        help="Image file extensions",
+        default=None,
+        help=f"File extensions to process. The default depends on `--mode`. For `file-hash` it's all extensions, for `image-hash` and `phash` it's {extensions_mode['image-hash']}",
     )
     parser.add_argument("-r", "--recursive", action="store_true", help="Read directories recursively")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
@@ -505,6 +637,13 @@ def main() -> None:
         type=int,
         default=DEFAULT_NORMALIZED_RESOLUTION,
         help="All pictures will be resized to this resolution prior to comparison. It should be smaller than the smallest picture in one duplicate group. If it's smaller, more differences in image details will be ignored.",
+    )
+    parser.add_argument(
+        "--hamming-threshold",
+        metavar="N",
+        type=int,
+        default=DEFAULT_HAMMING_THRESHOLD,
+        help="Maximum distance of semantic hashes which use the hamming metric",
     )
     parser.add_argument(
         "--parallel-read",
@@ -550,12 +689,15 @@ def main() -> None:
     else:
         db = None
 
-    hash_func = get_hash_func(args.mode, db, args.overwrite_cache, args.normalize, args.resolution_normalized)
-    metric = hash_metrics[args.mode]
-    hash_result = get_hashes(
-        args.directories, args.recursive, args.extensions, hash_func, metric, db, args.parallel_read
-    )
-    dupgroups = get_dupe_groups(metric, hash_result, args.chunksize, args.ntfy_topic)
+    extensions = extensions_mode[args.mode]
+    hash_kwargs: Dict[str, Any] = {"normalize": args.normalize, "resolution": args.resolution_normalized}
+    meta_kwargs: Dict[str, Any] = {}
+    hash_func = get_hash_func(args.mode, db, args.overwrite_cache, hash_kwargs, meta_kwargs)
+    metric = hash_func.hash.get_metric()
+
+    hash_result = get_hashes(args.directories, args.recursive, hash_func, extensions, db, args.parallel_read)
+    metric_kwargs: Dict[str, Any] = {"hamming_threshold": args.hamming_threshold}
+    dupgroups = get_dupe_groups(metric, metric_kwargs, hash_result, args.chunksize, args.ntfy_topic)
 
     with StdoutFile(args.out, "wt", newline="") as fw:
         writer = csv.writer(fw)
@@ -581,7 +723,7 @@ def main() -> None:
                 try:
                     write_dup(db, writer, i, path)
                 except Exception:
-                    logging.exception("Failed to obtain meta info for <%s>")
+                    logging.exception("Failed to obtain meta info for <%s>", path)
 
 
 if __name__ == "__main__":

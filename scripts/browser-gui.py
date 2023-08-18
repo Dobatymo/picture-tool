@@ -38,7 +38,7 @@ from PySide2.QtWidgets import (
     QWidget,
 )
 
-from picturetool.utils import extensions, parse_gpsinfo
+from picturetool.utils import extensions_images, parse_gpsinfo
 
 APP_NAME = "Photo manager"
 APP_ID = "photo-manager"
@@ -275,7 +275,7 @@ class PhotoListWidget(QListWidget):
             return
 
         self.clear()
-        for _path in scandir_ext(basepath, extensions):
+        for _path in scandir_ext(basepath, extensions_images):
             path = Path(_path)
             try:
                 data = self.get_thumb_from_db(path)
@@ -361,8 +361,8 @@ class MyWidget(QWidget):
             self.viewer.load_from_path(Path(directory))
 
     def load_path_location(self, lat, lon) -> None:
-        def asd() -> Iterator[Tuple[float, Path]]:
-            for entry in scandir_ext(self.basepath, extensions):
+        def iterdirs_with_distances() -> Iterator[Tuple[float, Path]]:
+            for entry in scandir_ext(self.basepath, extensions_images):
                 path = Path(entry)
                 with Image.open(os.fspath(path)) as img:
                     info = exifinfo(img)
@@ -375,7 +375,7 @@ class MyWidget(QWidget):
                 logging.debug("Target: %s, %s Image: %s, %s Distance: %s", lat, lon, img_lat, img_lon, distance)
                 yield distance, path
 
-        sortedbydistance = sorted(asd())
+        sortedbydistance = sorted(iterdirs_with_distances())
 
         self.viewer.clear()
         for distance, path in sortedbydistance:

@@ -1,4 +1,3 @@
-# %pip install numpy torch transformers faiss-cpu pillow tqdm
 import csv
 import logging
 import os
@@ -13,15 +12,16 @@ from genutility.args import is_dir
 from genutility.file import StdoutFile
 from genutility.filesystem import scandir_ext
 from genutility.iter import batch
+from genutility.rich import Progress
 from PIL import Image
+from rich.progress import Progress as RichProgress
 from torchvision.transforms import functional as F
-from tqdm import tqdm
 from transformers.image_utils import ImageFeatureExtractionMixin
 from transformers.models.vit.feature_extraction_vit import ViTFeatureExtractor
 from transformers.models.vit.modeling_vit import ViTModel
 
 from picturetool.ml_utils import faiss_duplicates_threshold_pairs
-from picturetool.utils import CollectingIterable, ThreadedIterator, extensions
+from picturetool.utils import CollectingIterable, ThreadedIterator, extensions_images
 
 DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
 
@@ -57,15 +57,15 @@ def extract_embeddings(
     return features
 
 
-def generate_embeddings(model, extractor, pictures, verbose, batchsize):
-    for images in batch(tqdm(pictures, disable=not verbose), batchsize, list):
+def generate_embeddings(model, extractor, pictures, batchsize, progress: Progress) -> Iterator[np.ndarray]:
+    for images in batch(progress.track(pictures), batchsize, list):
         yield extract_embeddings(model, extractor, images)
 
 
 def find_dups_ml(
     path: Path, vit_model: str, batchsize: int = 100, verbose: bool = False
 ) -> Tuple[List[Path], np.ndarray]:
-    paths = CollectingIterable(map(Path, scandir_ext(path, extensions)))
+    paths = CollectingIterable(map(Path, scandir_ext(path, extensions_images)))
 
     threshold = 1.0
     num_threads = (os.cpu_count() or 2) - 1
@@ -78,8 +78,10 @@ def find_dups_ml(
     model.eval()
 
     pictures = ThreadedIterator(load_images(paths), batchsize)
-    it = generate_embeddings(model, extractor, pictures, verbose, batchsize)
-    pairs = faiss_duplicates_threshold_pairs("l2-squared", it, threshold, 1000, verbose=False)
+    with RichProgress(disable=not verbose) as progress:
+        p = Progress(progress)
+        it = generate_embeddings(model, extractor, pictures, batchsize, p)
+        pairs = faiss_duplicates_threshold_pairs("l2-squared", it, threshold, 1000, p)
     assert paths.exhausted
 
     return paths.collection, pairs

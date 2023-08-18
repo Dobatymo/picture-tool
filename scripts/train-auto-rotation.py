@@ -18,7 +18,7 @@ from torchmetrics.functional.classification import multiclass_accuracy
 from torchvision import models
 from torchvision import transforms as T
 
-from picturetool.utils import extensions
+from picturetool.utils import extensions_images
 
 
 def preview(dataset: Dataset) -> None:
@@ -101,7 +101,7 @@ class AugmentedRotationDataset(Dataset):
         paths: List[Path] = []
         labels: List[int] = []
 
-        for path in scandir_ext(basepath, extensions):
+        for path in scandir_ext(basepath, extensions_images):
             _path = os.fspath(path)
             try:
                 label = cls.get_label(_path)
