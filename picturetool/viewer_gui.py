@@ -27,7 +27,7 @@ from .shared_gui import (
     read_qt_image,
     rotate_save,
 )
-from .utils import extensions
+from .utils import extensions_images
 
 T = TypeVar("T")
 
@@ -153,7 +153,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     loaded: Optional[dict]
     path_idx: int
 
-    extensions = extensions
+    extensions = extensions_images
     cache_size = 10
     deleted_subdir = "deleted"
     delete_mode = "move-to-subdir"

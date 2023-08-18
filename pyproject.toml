@@ -50,7 +50,8 @@ python-dateutil = ">=2.8.2"
 requests = ">=2.28.1"
 reverse-geocoder = ">=1.5.1"
 threadpoolctl = ">=3.1.0"
-tqdm = ">=4.0"
+rich = ">=12.0.0"
+rich-argparse = "^1.2.0"
 geopy = ">=2.3.0"
 more-itertools = ">=5.0.0"
 dlib = {version = ">=19.24", source = "pypi-dlib-bin", optional = true}
@@ -87,6 +88,7 @@ numba-progress = ">=0.0.4"
 numba = ">=0.56.4"
 dask = ">=2023.3.1"
 annoy = ">=1.17.1"
+py-cpuinfo = ">=9.0.0"
 
 [tool.mypy]
 ignore_missing_imports = true

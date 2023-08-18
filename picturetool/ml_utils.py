@@ -1,10 +1,10 @@
 from enum import Enum
-from typing import Iterable, Iterator, List, Tuple, Union, overload
+from typing import Iterable, Iterator, List, Optional, Tuple, Union, overload
 
 import faiss
 import numpy as np
+from genutility.callbacks import Progress
 from more_itertools import spy
-from tqdm import tqdm
 
 from .utils import slice_idx
 
@@ -74,20 +74,21 @@ def faiss_from_array(
     return index
 
 
-def faiss_duplicates_top_k(
-    index: FaissIndexTypes, batchsize: int, top_k: int, verbose: bool = False
+def faiss_duplicates_topk(
+    index: FaissIndexTypes, batchsize: int, topk: int, progress: Optional[Progress] = None
 ) -> Iterator[Tuple[int, int, float]]:
     if batchsize < 1:
-        raise ValueError("batchsize must be >= 1 (it's {batchsize})")
+        raise ValueError(f"batchsize must be >= 1 (it's {batchsize})")
 
-    if top_k < 1:
-        raise ValueError("top_k must be >= 1 (it's {top_k})")
+    if topk < 1:
+        raise ValueError(f"topk must be >= 1 (it's {topk})")
 
-    with tqdm(total=index.ntotal, disable=not verbose) as pbar:
+    progress = progress or Progress()
+    with progress.task(total=index.ntotal, description="Finding duplicates...") as task:
         for i0, ni in slice_idx(index.ntotal, batchsize):
             query = _reconstruct_fixed(index, i0, ni)
 
-            distances, indices = index.search(query, top_k)
+            distances, indices = index.search(query, topk)
 
             rindices = range(i0, i0 + ni)
             for q_indices, q_idx, q_distances in zip(indices, rindices, distances):
@@ -97,31 +98,32 @@ def faiss_duplicates_top_k(
                     if idx != q_idx:
                         yield idx, q_idx, dist
 
-            pbar.update(ni)
+            task.advance(ni)
 
 
 @overload
 def faiss_duplicates_threshold(
-    index: faiss.IndexFlat, batchsize: int, threshold: float, verbose: bool = ...
+    index: faiss.IndexFlat, batchsize: int, threshold: float, progress: Optional[Progress] = ...
 ) -> Iterator[Tuple[int, int, float]]:
     ...
 
 
 @overload
 def faiss_duplicates_threshold(
-    index: faiss.IndexBinary, batchsize: int, threshold: int, verbose: bool = ...
+    index: faiss.IndexBinary, batchsize: int, threshold: int, progress: Optional[Progress] = ...
 ) -> Iterator[Tuple[int, int, float]]:
     ...
 
 
-def faiss_duplicates_threshold(index, batchsize, threshold, verbose=False):
+def faiss_duplicates_threshold(index, batchsize, threshold, progress: Optional[Progress] = None):
     if batchsize < 1:
-        raise ValueError("batchsize must be >= 1 (it's {batchsize})")
+        raise ValueError(f"batchsize must be >= 1 (it's {batchsize})")
 
     if threshold < 0.0:
-        raise ValueError("threshold must be >= 0 (it's {threshold})")
+        raise ValueError(f"threshold must be >= 0 (it's {threshold})")
 
-    with tqdm(total=index.ntotal, disable=not verbose) as pbar:
+    progress = progress or Progress()
+    with progress.task(total=index.ntotal, description="Finding duplicates...") as task:
         for i0, ni in slice_idx(index.ntotal, batchsize):
             query = _reconstruct_fixed(index, i0, ni)
 
@@ -134,7 +136,7 @@ def faiss_duplicates_threshold(index, batchsize, threshold, verbose=False):
                     if idx < q_idx:
                         yield idx, q_idx, dist
 
-            pbar.update(ni)
+            task.advance(ni)
 
 
 def faiss_to_pairs(it: Iterable[Tuple[int, int, float]]) -> Tuple[np.ndarray, np.ndarray]:
@@ -156,16 +158,20 @@ def faiss_duplicates_threshold_pairs(
     arr: Union[np.ndarray, Iterable[np.ndarray]],
     threshold: Union[int, float],
     chunksize: int,
-    verbose: bool,
+    progress: Progress,
 ) -> np.ndarray:
     index = faiss_from_array(arr, metric)
-    pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, threshold, verbose))
+    pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, threshold, progress))
     return pairs
 
 
-def faiss_duplicates_top_k_pairs(
-    metric: str, arr: Union[np.ndarray, Iterable[np.ndarray]], top_k: int, chunksize: int, verbose: bool
+def faiss_duplicates_topk_pairs(
+    metric: str,
+    arr: Union[np.ndarray, Iterable[np.ndarray]],
+    topk: int,
+    chunksize: int,
+    progress: Progress,
 ) -> np.ndarray:
     index = faiss_from_array(arr, metric)
-    pairs, dists = faiss_to_pairs(faiss_duplicates_top_k(index, chunksize, top_k, verbose))
+    pairs, dists = faiss_to_pairs(faiss_duplicates_topk(index, chunksize, topk, progress))
     return pairs

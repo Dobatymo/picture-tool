@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import piexif
 from dateutil import tz
+from genutility.callbacks import Progress
 from genutility.datetime import is_aware
 from genutility.filesdb import FileDbWithId
-from genutility.iter import progress
 from genutility.numpy import hamming_dist_packed
 from genutility.typing import SizedIterable
 from pandas._typing import ValueKeyFunc
@@ -36,7 +36,7 @@ DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
 
 GpsT = Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]
 
-extensions = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".heif", ".webp"}
+extensions_images = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".heif", ".webp"}
 extensions_jpeg = {".jpg", ".jpeg"}
 extensions_heif = {".heic", ".heif"}
 extensions_exif = extensions_jpeg | extensions_heif
@@ -93,12 +93,23 @@ def npmp_to_pairs(it: Iterable[np.ndarray]) -> np.ndarray:
 
 
 def hamming_duplicates_chunk(
-    a_arr: np.ndarray, b_arr: np.ndarray, axis: int, hamming_threshold: int, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
+    a_arr: np.ndarray, b_arr: np.ndarray, axis: int, threshold: int, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
 ) -> np.ndarray:
     """Returns a list of coordinate pairs which are duplicates."""
 
     dists = hamming_dist_packed(a_arr, b_arr, axis)
-    return np.argwhere(dists <= hamming_threshold) + np.array(coords)
+    indices = np.argwhere(dists <= threshold)
+    return indices + np.array(coords)
+
+
+def hamming_duplicates_topk_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, axis: int, topk: int, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
+) -> np.ndarray:
+    """Returns a list of coordinate pairs which are duplicates."""
+
+    dists = hamming_dist_packed(a_arr, b_arr, axis)
+    indices = np.argpartition(dists, topk, axis=-1)[:, :topk]
+    return indices + np.array(coords)
 
 
 def l2_duplicates_chunk(
@@ -106,7 +117,17 @@ def l2_duplicates_chunk(
 ) -> np.ndarray:
     diff = a_arr - b_arr
     dists = np.sqrt(np.sum(diff * diff, axis=-1))
-    return np.argwhere(dists <= threshold) + np.array(coords)
+    indices = np.argwhere(dists <= threshold)
+    return indices + np.array(coords)
+
+
+def l2_duplicates_topk_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, topk: int, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
+) -> np.ndarray:
+    diff = a_arr - b_arr
+    dists = np.sqrt(np.sum(diff * diff, axis=-1))
+    indices = np.argpartition(dists, topk, axis=-1)[:, :topk]
+    return indices + np.array(coords)
 
 
 def l2squared_duplicates_chunk(
@@ -114,39 +135,57 @@ def l2squared_duplicates_chunk(
 ) -> np.ndarray:
     diff = a_arr - b_arr
     dists = np.sum(diff * diff, axis=-1)
-    return np.argwhere(dists <= threshold) + np.array(coords)
+    indices = np.argwhere(dists <= threshold)
+    return indices + np.array(coords)
 
 
-def hamming_duplicates(
-    sharr: npmp.SharedNdarray, chunkshape: Shape, hamming_threshold: int
-) -> SizedIterable[np.ndarray]:
+def l2squared_duplicates_topk_chunk(
+    a_arr: np.ndarray, b_arr: np.ndarray, topk: int, coords: Tuple[int, ...] = TUPLE_WITH_ZERO
+) -> np.ndarray:
+    diff = a_arr - b_arr
+    dists = np.sum(diff * diff, axis=-1)
+    indices = np.argpartition(dists, topk, axis=-1)[:, :topk]
+    return indices + np.array(coords)
+
+
+def npmp_duplicates_binary(sharr: npmp.SharedNdarray, chunkshape: Shape, func, **kwargs) -> SizedIterable[np.ndarray]:
     if len(sharr.shape) != 2 or sharr.dtype != np.uint8:
         raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
 
     a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
     b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
 
-    return npmp.ChunkedParallel(
-        hamming_duplicates_chunk,
-        a_arr,
-        b_arr,
-        chunkshape,
-        backend="multiprocessing",
-        axis=-1,
-        hamming_threshold=hamming_threshold,
-    )
+    return npmp.ChunkedParallel(func, a_arr, b_arr, chunkshape, backend="multiprocessing", **kwargs)
 
 
-def l2squared_duplicates(sharr: npmp.SharedNdarray, chunkshape: Shape, threshold: float) -> SizedIterable[np.ndarray]:
+def npmp_duplicates(sharr: npmp.SharedNdarray, chunkshape: Shape, func, **kwargs) -> SizedIterable[np.ndarray]:
     if len(sharr.shape) != 2:
         raise ValueError("Input must be a list of hashes (2-dimensional array)")
 
     a_arr = sharr.reshape((1, sharr.shape[0], sharr.shape[1]))
     b_arr = sharr.reshape((sharr.shape[0], 1, sharr.shape[1]))
 
-    return npmp.ChunkedParallel(
-        l2squared_duplicates_chunk, a_arr, b_arr, chunkshape, backend="multiprocessing", threshold=threshold
-    )
+    return npmp.ChunkedParallel(func, a_arr, b_arr, chunkshape, backend="multiprocessing", **kwargs)
+
+
+def npmt_duplicates_binary(arr: np.ndarray, chunkshape: Shape, func, **kwargs) -> SizedIterable[np.ndarray]:
+    if len(arr.shape) != 2 or arr.dtype != np.uint8:
+        raise ValueError("Input must be a list of packed hashes (2-dimensional byte array)")
+
+    a_arr = arr[None, :, :]
+    b_arr = arr[:, None, :]
+
+    return npmp.ChunkedParallel(func, a_arr, b_arr, chunkshape, backend="threading", **kwargs)
+
+
+def npmt_duplicates(arr: np.ndarray, chunkshape: Shape, func, **kwargs) -> SizedIterable[np.ndarray]:
+    if len(arr.shape) != 2:
+        raise ValueError("Input must be a list of hashes (2-dimensional array)")
+
+    a_arr = arr[None, :, :]
+    b_arr = arr[:, None, :]
+
+    return npmp.ChunkedParallel(func, a_arr, b_arr, chunkshape, backend="threading", **kwargs)
 
 
 def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
@@ -158,7 +197,11 @@ def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
 
 
 def npmp_duplicates_threshold_pairs(
-    metric: str, hashes: Union[np.ndarray, List[bytes]], threshold: Union[int, float], chunksize: int, verbose: bool
+    metric: str,
+    hashes: Union[np.ndarray, List[bytes]],
+    threshold: Union[int, float],
+    chunksize: int,
+    progress: Optional[Progress] = None,
 ) -> np.ndarray:
     # npmp.THREADPOOL_LIMIT = limit
 
@@ -172,22 +215,111 @@ def npmp_duplicates_threshold_pairs(
             buffer_fill(hashes, sharr.getbuffer())
         else:
             raise TypeError()
-        it = hamming_duplicates(sharr, (chunksize, chunksize), threshold)
+        it = npmp_duplicates_binary(
+            sharr, (chunksize, chunksize), hamming_duplicates_chunk, axis=-1, threshold=threshold
+        )
+    elif metric == "l2":
+        if not isinstance(threshold, float):
+            raise TypeError()
+        assert isinstance(hashes, np.ndarray)
+        sharr = npmp.SharedNdarray.from_array(hashes)
+        it = npmp_duplicates(sharr, (chunksize, chunksize), l2_duplicates_chunk, threshold=threshold)
     elif metric == "l2-squared":
         if not isinstance(threshold, float):
             raise TypeError()
         assert isinstance(hashes, np.ndarray)
         sharr = npmp.SharedNdarray.from_array(hashes)
-        it = l2squared_duplicates(sharr, (chunksize, chunksize), threshold)
+        it = npmp_duplicates(sharr, (chunksize, chunksize), l2squared_duplicates_chunk, threshold=threshold)
     else:
         raise ValueError(f"Invalid metric: {metric}")
 
-    if verbose:
-        it = progress(it, extra_info_callback=lambda total, length: "Matching hashes")
+    if progress is not None:
+        it = progress.track(it, description="Matching hashes")
 
     out = npmp_to_pairs(it)
     del sharr
     return out
+
+
+def npmp_duplicates_topk_pairs(
+    metric: str, hashes: Union[np.ndarray, List[bytes]], topk: int, chunksize: int, progress: Optional[Progress] = None
+) -> np.ndarray:
+    # npmp.THREADPOOL_LIMIT = limit
+
+    if metric == "hamming":
+        if isinstance(hashes, np.ndarray):
+            sharr = npmp.SharedNdarray.from_array(hashes)
+        elif isinstance(hashes, list):
+            sharr = npmp.SharedNdarray.create((len(hashes), len(hashes[0])), np.uint8)
+            buffer_fill(hashes, sharr.getbuffer())
+        else:
+            raise TypeError()
+        it = npmp_duplicates_binary(sharr, (chunksize, chunksize), hamming_duplicates_topk_chunk, axis=-1, topk=topk)
+    elif metric == "l2":
+        assert isinstance(hashes, np.ndarray)
+        sharr = npmp.SharedNdarray.from_array(hashes)
+        it = npmp_duplicates(sharr, (chunksize, chunksize), l2_duplicates_topk_chunk, topk=topk)
+    elif metric == "l2-squared":
+        assert isinstance(hashes, np.ndarray)
+        sharr = npmp.SharedNdarray.from_array(hashes)
+        it = npmp_duplicates(sharr, (chunksize, chunksize), l2squared_duplicates_topk_chunk, topk=topk)
+    else:
+        raise ValueError(f"Invalid metric: {metric}")
+
+    if progress is not None:
+        it = progress.track(it, description="Matching hashes")
+
+    out = array_from_iter(it)
+    del sharr
+    return out
+
+
+def npmt_duplicates_threshold_pairs(
+    metric: str, hashes: np.ndarray, threshold: Union[int, float], chunksize: int, progress: Optional[Progress] = None
+) -> np.ndarray:
+    # npmp.THREADPOOL_LIMIT = limit
+
+    if metric == "hamming":
+        if not isinstance(threshold, int):
+            raise TypeError()
+        it = npmt_duplicates_binary(
+            hashes, (chunksize, chunksize), hamming_duplicates_chunk, axis=-1, threshold=threshold
+        )
+    elif metric == "l2":
+        if not isinstance(threshold, float):
+            raise TypeError()
+        it = npmt_duplicates(hashes, (chunksize, chunksize), l2_duplicates_chunk, threshold=threshold)
+    elif metric == "l2-squared":
+        if not isinstance(threshold, float):
+            raise TypeError()
+        it = npmt_duplicates(hashes, (chunksize, chunksize), l2squared_duplicates_chunk, threshold=threshold)
+    else:
+        raise ValueError(f"Invalid metric: {metric}")
+
+    if progress is not None:
+        it = progress.track(it, description="Matching hashes")
+
+    return npmp_to_pairs(it)
+
+
+def npmt_duplicates_topk_pairs(
+    metric: str, hashes: np.ndarray, topk: int, chunksize: int, progress: Optional[Progress] = None
+) -> np.ndarray:
+    # npmp.THREADPOOL_LIMIT = limit
+
+    if metric == "hamming":
+        it = npmt_duplicates_binary(hashes, (chunksize, chunksize), hamming_duplicates_topk_chunk, axis=-1, topk=topk)
+    elif metric == "l2":
+        it = npmt_duplicates(hashes, (chunksize, chunksize), l2_duplicates_topk_chunk, topk=topk)
+    elif metric == "l2-squared":
+        it = npmt_duplicates(hashes, (chunksize, chunksize), l2squared_duplicates_topk_chunk, topk=topk)
+    else:
+        raise ValueError(f"Invalid metric: {metric}")
+
+    if progress is not None:
+        it = progress.track(it, description="Matching hashes")
+
+    return array_from_iter(it)
 
 
 @total_ordering

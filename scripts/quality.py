@@ -13,7 +13,7 @@ from genutility.filesystem import scandir_ext
 from PIL import Image
 from torchvision.transforms import functional as f
 
-from picturetool.utils import extensions
+from picturetool.utils import extensions_images
 
 
 def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
@@ -66,7 +66,7 @@ def torch_iqa_score(path: str) -> Dict[str, float]:
 def main():
     parser = ArgumentParser()
     parser.add_argument("directory", type=is_dir)
-    parser.add_argument("--extensions", nargs="+", default=extensions)
+    parser.add_argument("--extensions", nargs="+", default=extensions_images)
     args = parser.parse_args()
 
     it = scandir_ext(args.directory, args.extensions)

@@ -1,13 +1,15 @@
+from typing import Optional
+
 import numpy as np
 from annoy import AnnoyIndex
-from tqdm import tqdm
+from genutility.callbacks import Progress
 
 
 def annoy_from_array(arr: np.ndarray, norm: str, n_trees: int = 100) -> AnnoyIndex:
     if norm == "euclidean":
         index = AnnoyIndex(arr.shape[1], norm)
     elif norm == "hamming":
-        index = AnnoyIndex(arr.shape[1] * 8, norm)
+        index = AnnoyIndex(arr.shape[1], norm)
     else:
         raise ValueError(f"Invalid norm: {norm}")
 
@@ -18,9 +20,10 @@ def annoy_from_array(arr: np.ndarray, norm: str, n_trees: int = 100) -> AnnoyInd
     return index
 
 
-def annoy_duplicates_top_k(index: AnnoyIndex, top_k: int, verbose: bool = False) -> np.ndarray:
+def annoy_duplicates_topk(index: AnnoyIndex, topk: int, progress: Optional[Progress] = None) -> np.ndarray:
     out = []
-    for i in tqdm(range(index.get_n_items()), disable=not verbose):
-        items, distances = index.get_nns_by_item(i, top_k, include_distances=True)
+    progress = progress or Progress()
+    for i in progress.track(range(index.get_n_items())):
+        items, distances = index.get_nns_by_item(i, topk, include_distances=True)
         out.append(items)
     return np.array(out)

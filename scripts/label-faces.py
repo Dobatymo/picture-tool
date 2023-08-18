@@ -12,7 +12,7 @@ from genutility.concurrency import parallel_map
 from genutility.filesystem import scandir_ext
 from genutility.pickle import read_pickle, write_pickle
 
-from picturetool.utils import extensions
+from picturetool.utils import extensions_images
 
 PathType = Union[Path, os.DirEntry]
 RawImage = np.ndarray
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("path", type=is_dir, help="Input path to scan for images")
     parser.add_argument("--strict", type=float, default=DEFAULT_STRICT_BOUND)
-    parser.add_argument("--extensions", nargs="+", default=extensions, help="List of file extensions to scan")
+    parser.add_argument("--extensions", nargs="+", default=extensions_images, help="List of file extensions to scan")
     parser.add_argument("--suggest", type=float, default=DEFAULT_SUGGEST_BOUND)
     parser.add_argument("--faces-db", type=Path, default=DEFAULT_FACES_DB)
     parser.add_argument("--vector-db", type=Path, default=DEFAULT_VECTOR_DB)
