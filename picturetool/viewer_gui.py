@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Generic, List, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 import humanize
-import reverse_geocoder
 from genutility.time import MeasureTime
+from houtu import ReverseGeocode
 from natsort import os_sorted
 from PIL import ImageOps
 from PySide2 import QtCore, QtGui, QtWidgets
@@ -33,6 +33,8 @@ T = TypeVar("T")
 
 
 def gps_dms_to_dd(dms: Sequence[Fraction]) -> float:
+    """Degrees Minutes Seconds to Decimal Degrees"""
+
     return float(dms[0] + dms[1] / 60 + dms[2] / 3600)
 
 
@@ -294,7 +296,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self._view_clear()
 
         if self.resolve_city_names:
-            self.rg = reverse_geocoder
+            self.rg = ReverseGeocode()
 
     def _view_clear(self) -> None:
         self.path_idx = -1
@@ -454,8 +456,8 @@ class PictureWindow(QtWidgets.QMainWindow):
 
     @lru_cache(1000)
     def get_location(self, lat: Sequence[Fraction], lon: Sequence[Fraction]) -> Optional[str]:
-        lat_lon = gps_dms_to_dd(lat), gps_dms_to_dd(lon)
-        return self.rg.get(lat_lon)["name"]
+        coords, distance, city = self.rg.lat_lon(gps_dms_to_dd(lat), gps_dms_to_dd(lon), "degrees", False)
+        return city.name
 
     def make_cam_info_string(self, meta: Dict[str, Any]) -> str:
         if self.resolve_city_names:

@@ -525,7 +525,7 @@ def _fix_thumbnail(
     if (orientation is None) == (op is None):
         raise ValueError("Either orientation or op must be given")
 
-    if "thumbnail" in exif:
+    if exif.get("thumbnail") is not None:
         assert exif["thumbnail"], exif["thumbnail"]
         try:
             if orientation is not None:

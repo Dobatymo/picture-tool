@@ -4,7 +4,7 @@ import shutil
 from io import BytesIO
 from pathlib import Path
 from queue import Queue
-from typing import Any, Iterator, Tuple
+from typing import Iterator, Tuple, Union
 
 import piexif
 from filemeta.exif import exif_table
@@ -37,6 +37,7 @@ from PySide2.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from typing_extensions import TypeAlias
 
 from picturetool.utils import extensions_images, parse_gpsinfo
 
@@ -44,7 +45,7 @@ APP_NAME = "Photo manager"
 APP_ID = "photo-manager"
 PLACEHOLDER_PATH = "data/placeholder.png"
 
-ThumbsQueueT = "Queue[Union[str, Tuple[QListWidgetItem, Path]]]"
+ThumbsQueueT: TypeAlias = "Queue[Union[None, str, Tuple[QListWidgetItem, Path]]]"
 
 
 def icon_from_data(data: bytes) -> QIcon:
@@ -62,7 +63,7 @@ class ThumbnailDB(FileDbSimple):
             ("thumbnail", "BLOB", "?"),
         ]
 
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         FileDbSimple.__init__(self, path, "thumbnails")
 
 
@@ -90,11 +91,12 @@ class ThumbnailWorker(QThread):
             if elm is None:
                 self.db.close()
                 break
-            if elm == "commit":
+            elif isinstance(elm, str):
+                assert elm == "commit"
                 self.db.commit()
                 continue
-
-            item, path = elm
+            else:
+                item, path = elm
 
             data = self.create_thumbnail(path)
             self.db.add(path, derived={"thumbnail": data}, commit=False)
@@ -107,7 +109,7 @@ class ThumbnailWorker(QThread):
 
 
 class ExifDialog(QDialog):
-    def __init__(self, path, parent, **kwargs) -> None:
+    def __init__(self, path: Path, parent, **kwargs) -> None:
         QDialog.__init__(self, parent, **kwargs)
 
         self.setWindowTitle("Image information")
@@ -160,7 +162,7 @@ class PhotoListWidget(QListWidget):
         self.thumbsthread.wait()
 
     def get_thumb_from_db(self, path: Path) -> bytes:
-        (data,) = self.db.get(path, only={"thumbnail"})
+        (data,) = self.db.get(path, only=("thumbnail",))
         return data
 
     def show_settings(self) -> None:
@@ -184,7 +186,7 @@ class PhotoListWidget(QListWidget):
         for item in self.selectedItems():
             print(item)
 
-    def show_exif_selected(self):
+    def show_exif_selected(self) -> None:
         for item in self.selectedItems():
             src = item.data(Qt.UserRole)
             dlg = ExifDialog(src, self)
@@ -248,7 +250,7 @@ class PhotoListWidget(QListWidget):
         self.addItem(item)
         return item
 
-    def addItemFromData(self, path: Path, data: Any) -> QListWidgetItem:
+    def addItemFromData(self, path: Path, data: bytes) -> QListWidgetItem:
         icon = icon_from_data(data)
         item = QListWidgetItem(icon, path.name)
         item.setData(Qt.UserRole, path)
