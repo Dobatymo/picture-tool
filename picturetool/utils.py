@@ -36,10 +36,11 @@ DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
 
 GpsT = Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]
 
-extensions_images = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".heif", ".webp"}
+extensions_images = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".dng", ".heic", ".heif", ".webp"}
 extensions_jpeg = {".jpg", ".jpeg"}
 extensions_heif = {".heic", ".heif"}
-extensions_exif = extensions_jpeg | extensions_heif
+extensions_tiff = {".tif", ".tiff", ".dng"}
+extensions_exif = extensions_jpeg | extensions_heif | extensions_tiff
 
 
 def _gps_tuple_to_fraction(gps: GpsT) -> Fraction:
