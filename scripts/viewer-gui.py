@@ -6,7 +6,7 @@ from multiprocessing.connection import Client
 from pathlib import Path
 from typing import Optional
 
-from platformdirs import user_log_dir
+from platformdirs import user_config_dir, user_log_dir
 
 APP_AUTHOR = "Dobatymo"
 APP_NAME = "picture-viewer"
@@ -45,7 +45,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="Log additional information useful for debugging")
     args = parser.parse_args()
 
-    log_fmt = "%(asctime)s %(levelname)s:%(name)s:%(funcName)s:%(message)s"
+    log_fmt = "%(asctime)s %(levelname)s:%(name)s:%(funcName)s:%(thread)d:%(message)s"
 
     filename = Path(user_log_dir(APP_NAME, APP_AUTHOR)) / "viewer-gui.log"
     filename.parent.mkdir(parents=True, exist_ok=True)
@@ -67,6 +67,8 @@ if __name__ == "__main__":
     # `try_send` will exit the process if the app is already running.
     # These imports are afterwards, so they don't have to be loaded when the app is already running
     # and thus speed up the file open process.
+    import json
+
     from PySide2 import QtCore, QtWidgets
 
     from picturetool.viewer_gui import PictureWindow, PyServer, WindowManager
@@ -74,17 +76,41 @@ if __name__ == "__main__":
     def excepthook(exc_type, value, traceback):
         logging.exception("Unhandled exception", exc_info=(exc_type, value, traceback))
 
+    class MyWindowManager(WindowManager):
+        @QtCore.Slot()
+        def about(self) -> None:
+            QtWidgets.QMessageBox.about(
+                None,
+                "About",
+                f"Open windows: {len(self.windows)}",
+            )
+
     sys.excepthook = excepthook
 
-    wm = WindowManager(APP_NAME, PictureWindow)
+    app = QtWidgets.QApplication([])
+
+    configfile = Path(user_config_dir(APP_NAME, APP_AUTHOR, roaming=True)) / "config.json"
+    try:
+        with open(configfile, encoding="utf-8") as fr:
+            config = json.load(fr)
+    except FileNotFoundError:
+        config = {}
+    except json.JSONDecodeError as e:
+        QtWidgets.QMessageBox.warning(
+            None,
+            "Could read config file",
+            f"Config file <{configfile}> failed to parse: {e}",
+        )
+        ret = app.exec_()
+        sys.exit(ret)
+
+    wm = MyWindowManager(APP_NAME, PictureWindow)
     s = PyServer(APP_PIPE_NAME)
     s.start()
     s.message_received.connect(wm.create_from_args)
 
-    app = QtWidgets.QApplication([])
-
     wm.make_tray(app)
-    wm.set_create_args(maximized=True, resolve_city_names=args.resolve_city_names, mode=args.mode)
+    wm.set_create_args(maximized=True, resolve_city_names=args.resolve_city_names, mode=args.mode, config=config)
 
     window = wm.create()
 

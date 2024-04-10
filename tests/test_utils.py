@@ -8,6 +8,7 @@ from genutility.test import MyTestCase, parametrize
 
 from picturetool.utils import (
     Max,
+    MyFraction,
     hamming_duplicates_chunk,
     l2_duplicates_chunk,
     l2squared_duplicates_chunk,
@@ -367,6 +368,20 @@ class TestUtils(MyTestCase):
         result = np_sorted(arr)
         truth = np.array(sorted(arr, key=lambda x: x.tolist()))
         np.testing.assert_array_equal(result, truth)
+
+    @parametrize(
+        (0, 1, 0, 1),
+        (1, 100000, 1, 100000),
+        (100000, 1, 100000, 1),
+        (9, 10000, 1, 1000),
+        (10000, 9, 1000, 1),
+        (99, 10000, 1, 101),
+        (10000, 99, 101, 1),
+    )
+    def test_myfraction_limit(self, n1, d1, n2, d2):
+        result = MyFraction(n1, d1).limit(3, 9)
+        truth = MyFraction(n2, d2)
+        self.assertEqual(truth, result)
 
 
 if __name__ == "__main__":

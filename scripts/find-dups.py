@@ -1,9 +1,12 @@
 import csv
 import hashlib
 import logging
+import logging.handlers
 import multiprocessing
 import os
+import queue
 import sys
+import threading
 from argparse import ArgumentParser
 from collections import defaultdict
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
@@ -53,11 +56,17 @@ from picturetool.utils import (
     DEFAULT_APPDATA_DIR,
     DEFAULT_HASHDB,
     HashDB,
+    MultiprocessingProcess,
+    QueueListenerContext,
+    ThreadRichHandler,
     extensions_heif,
     extensions_images,
     get_exif_dates,
     make_groups,
     npmp_duplicates_threshold_pairs,
+    rich_sys_excepthook,
+    rich_sys_unraisablehook,
+    rich_threading_excepthook,
 )
 
 COMMIT_PERIOD_SECONDS = 120.0
@@ -399,7 +408,7 @@ def get_hash_func(
     metaprovider = meta_providers[mode](**meta_kwargs)
 
     if db is not None:
-        hash_func = wrap_with_db(hashprovider, metaprovider, db, overwrite_cache)
+        hash_func: wrap = wrap_with_db(hashprovider, metaprovider, db, overwrite_cache)
     else:
         hash_func = wrap_without_db(hashprovider, metaprovider)
 
@@ -411,6 +420,30 @@ class HashResult(NamedTuple):
     hashes: List[bytes]
 
 
+def log_basic_config(level, handler) -> None:
+    logging.basicConfig(level=level, format="%(message)s", handlers=[handler])
+    logging.captureWarnings(True)
+    if level == logging.DEBUG:
+        logging.getLogger("PIL").setLevel(logging.INFO)
+        logging.getLogger("genutility").setLevel(logging.INFO)
+
+    threading.excepthook = rich_threading_excepthook
+    sys.excepthook = rich_sys_excepthook
+    sys.unraisablehook = rich_sys_unraisablehook
+    # there are still unstyled exceptions logged by `multiprocessing.process.BaseProgress._bootstrap`
+
+
+def initializer(
+    queue: Optional[queue.Queue], hash_func: wrap, extensions: Optional[Collection[str]], level: int = logging.NOTSET
+) -> None:
+    name = multiprocessing.current_process().name
+    if queue is not None:
+        handler = logging.handlers.QueueHandler(queue)
+        log_basic_config(level, handler)
+    hash_func.initializer(extensions)
+    logging.debug("Initialized worker %s", name)
+
+
 def get_hashes(
     directories: Iterable[Path],
     recursive: bool,
@@ -418,6 +451,7 @@ def get_hashes(
     extensions: Optional[Collection[str]] = None,
     db: Optional[HashDB] = None,
     parallel_read: Optional[int] = None,
+    queue: Optional[queue.Queue] = None,
 ) -> HashResult:
     paths: List[str] = []
     hashes: List[bytes] = []
@@ -429,7 +463,21 @@ def get_hashes(
         img_hash: bytes
         inodes: Dict[Tuple[int, int], Set[Path]] = {}
         p = Progress(progress)
-        executor = ProcessPoolExecutor(parallel_read, initializer=hash_func.initializer, initargs=(extensions,))
+
+        mp_context = multiprocessing.get_context()
+        mp_context.Process = MultiprocessingProcess
+        executor = ProcessPoolExecutor(
+            parallel_read,
+            mp_context,
+            initializer=initializer,
+            initargs=(queue, hash_func, extensions, logging.root.level),
+        )
+
+        logging.debug("Start reading files using %d workers", parallel_read)
+
+        num_cached = 0
+        num_fresh = 0
+        num_error = 0
 
         try:
             for entry in p.track(pathiter(directories, recursive), description="Found {task.completed} files"):
@@ -465,9 +513,6 @@ def get_hashes(
                 )
             del inodes
 
-            num_cached = 0
-            num_fresh = 0
-            num_error = 0
             delta = DeltaTime()
             for future in p.track(
                 as_completed(futures), total=len(futures), description="Computed {task.completed}/{task.total} hashes"
@@ -536,7 +581,9 @@ def get_hashes(
                 if db is not None:
                     db.commit()
             finally:
+                logging.debug("Shutting down worker processes...")
                 executor.shutdown()
+                logging.debug("Shutting down worker processes done")
 
     return HashResult(paths, hashes)
 
@@ -588,7 +635,6 @@ def main() -> None:
     try:
         config_path = DEFAULT_APPDATA_DIR / "config.json"
         default_config = {k.replace("-", "_"): v for k, v in read_json(config_path).items()}
-        logging.debug("Loaded default arguments from %s", config_path)
     except FileNotFoundError:
         default_config = {}
 
@@ -646,11 +692,7 @@ def main() -> None:
         help="Maximum distance of semantic hashes which use the hamming metric",
     )
     parser.add_argument(
-        "--parallel-read",
-        metavar="N",
-        type=int,
-        default=DEFAULT_PARALLEL_READ,
-        help="Default read concurrency",
+        "--parallel-read", metavar="N", type=int, default=DEFAULT_PARALLEL_READ, help="Default read concurrency"
     )
     parser.add_argument(
         "--chunksize",
@@ -677,10 +719,12 @@ def main() -> None:
     parser.set_defaults(**default_config)
     args = parser.parse_args()
 
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
-        logging.basicConfig(level=logging.INFO)
+    handler = ThreadRichHandler(verbose=args.verbose, log_time_format="%Y-%m-%d %H-%M-%S%Z")
+    level = logging.DEBUG if args.verbose else logging.INFO
+    log_basic_config(level, handler)  # don't use logging above this line
+
+    queue = multiprocessing.Manager().Queue(-1)
+    queuelistener = QueueListenerContext(queue, handler)
 
     if args.hashdb:
         args.hashdb.parent.mkdir(parents=True, exist_ok=True)
@@ -695,9 +739,10 @@ def main() -> None:
     hash_func = get_hash_func(args.mode, db, args.overwrite_cache, hash_kwargs, meta_kwargs)
     metric = hash_func.hash.get_metric()
 
-    hash_result = get_hashes(args.directories, args.recursive, hash_func, extensions, db, args.parallel_read)
+    with queuelistener:
+        hash_result = get_hashes(args.directories, args.recursive, hash_func, extensions, db, args.parallel_read, queue)
     metric_kwargs: Dict[str, Any] = {"hamming_threshold": args.hamming_threshold}
-    dupgroups = get_dupe_groups(metric, metric_kwargs, hash_result, args.chunksize, args.ntfy_topic)
+    dupgroups = get_dupe_groups(metric, hash_result, metric_kwargs, args.chunksize, args.ntfy_topic)
 
     with StdoutFile(args.out, "wt", newline="") as fw:
         writer = csv.writer(fw)
@@ -727,4 +772,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import colorama
+
+    colorama.init()
+
     main()

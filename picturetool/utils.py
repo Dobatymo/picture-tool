@@ -1,4 +1,11 @@
+import logging
+import logging.handlers
+import multiprocessing
+import os
+import platform
 import re
+import subprocess  # nosec
+import sys
 import threading
 from datetime import datetime, timedelta, tzinfo
 from fractions import Fraction
@@ -6,7 +13,6 @@ from functools import total_ordering
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
-from queue import Queue
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar, Union
 
 import networkx as nx
@@ -14,6 +20,7 @@ import numpy as np
 import pandas as pd
 import piexif
 from dateutil import tz
+from genutility._files import to_dos_path
 from genutility.callbacks import Progress
 from genutility.datetime import is_aware
 from genutility.filesdb import FileDbWithId
@@ -21,6 +28,11 @@ from genutility.numpy import hamming_dist_packed
 from genutility.typing import SizedIterable
 from pandas._typing import ValueKeyFunc
 from platformdirs import user_data_dir
+from rich.console import ConsoleRenderable
+from rich.logging import RichHandler
+from rich.text import Text as RichText
+from rich.traceback import Traceback
+from typing_extensions import NotRequired, Self
 
 from . import npmp
 
@@ -362,8 +374,8 @@ def pd_sort_groups_by_first_row(
 
 class SortValuesKwArgs(TypedDict):
     by: str
-    ascending: bool
-    key: ValueKeyFunc
+    ascending: NotRequired[bool]
+    key: NotRequired[ValueKeyFunc]
 
 
 def pd_sort_within_group_slow(
@@ -479,15 +491,9 @@ def get_exif_dates(exif: dict) -> Dict[str, datetime]:
         ),
     }
 
-    m1 = {
-        "ImageIFD": "0th",
-        "ExifIFD": "Exif",
-    }
+    m1 = {"ImageIFD": "0th", "ExifIFD": "Exif"}
 
-    m2 = {
-        "ImageIFD": piexif.ImageIFD,
-        "ExifIFD": piexif.ExifIFD,
-    }
+    m2 = {"ImageIFD": piexif.ImageIFD, "ExifIFD": piexif.ExifIFD}
 
     out: Dict[str, datetime] = {}
 
@@ -540,45 +546,6 @@ def make_groups(dups: np.ndarray) -> Iterator[Set[int]]:
     return nx.connected_components(G)
 
 
-class ThreadedIterator(Iterator[T]):
-    queue: "Queue[Tuple[bool, Union[T, None, Exception]]]"
-    exhausted: bool
-
-    def __init__(self, it: Iterable[T], maxsize: int) -> None:
-        self.it = it
-        self.queue = Queue(maxsize)
-        self.thread = threading.Thread(target=self.worker, daemon=True)
-        self.thread.start()
-        self.exhausted = False
-
-    def worker(self) -> None:
-        try:
-            for item in self.it:
-                self.queue.put((True, item))
-            self.queue.put((False, None))
-        except Exception as e:
-            self.queue.put((False, e))
-
-    def __next__(self) -> T:
-        if self.exhausted:
-            raise StopIteration
-
-        b, item = self.queue.get()
-        if not b:
-            self.thread.join()
-            if item is None:
-                self.exhausted = True
-                raise StopIteration
-            else:
-                assert isinstance(item, Exception)
-                raise item
-
-        return item
-
-    def __iter__(self) -> "ThreadedIterator":
-        return self
-
-
 def slice_idx(total: int, batchsize: int) -> Iterator[Tuple[int, int]]:
     if batchsize < 1:
         raise ValueError("batchsize must be >=1")
@@ -610,3 +577,144 @@ class CollectingIterable(Iterable[T]):
             self.collection.append(item)
             yield item
         self.exhausted = True
+
+
+class MyFraction(Fraction):
+    def swap(self) -> "MyFraction":
+        return MyFraction(self.denominator, self.numerator)
+
+    def limit_denominator(self, max_denominator: int) -> "MyFraction":
+        return MyFraction(super().limit_denominator(max_denominator))
+
+    def limit_numerator(self, max_numerator: int) -> "MyFraction":
+        if self.numerator == 0:
+            return MyFraction(self)
+        return self.swap().limit_denominator(max_numerator).swap()
+
+    def is_larger_one(self) -> bool:
+        return self.numerator > self.denominator
+
+    def is_one(self) -> bool:
+        return self.numerator == self.denominator
+
+    def is_less_one(self) -> bool:
+        return self.numerator < self.denominator
+
+    def limit(self, expmin: int, expmax: int) -> "MyFraction":
+        out = self
+        if self.is_larger_one():
+            for exp in range(expmax, expmin - 1, -1):
+                try:
+                    new = out.limit_numerator(10**exp)
+                except ZeroDivisionError:
+                    return out
+                if new.denominator == 0:
+                    return out
+                out = new
+        else:
+            for exp in range(expmax, expmin - 1, -1):
+                new = out.limit_denominator(10**exp)
+                if new.numerator == 0:
+                    return out
+                out = new
+        return out
+
+
+def cumsum(arr: np.ndarray) -> np.ndarray:
+    out = np.empty_like(arr)
+    out[0] = 0
+    out[1:] = np.cumsum(arr[:-1])
+    return out
+
+
+def show_in_file_manager(path: str) -> None:
+    if platform.system() == "Windows":
+        path = to_dos_path(path)
+        args = f'explorer /select,"{path}"'
+        subprocess.run(args)  # nosec
+    else:
+        raise RuntimeError("Önly windows implemented")
+
+
+def open_using_default_app(path: str) -> None:
+    if platform.system() == "Windows":  # Windows
+        os.startfile(path)  # nosec
+    elif platform.system() == "Darwin":  # macOS
+        subprocess.call(["open", path])  # nosec
+    else:  # Linux variants
+        subprocess.call(["xdg-open", path])  # nosec
+
+
+class QueueListenerContext(logging.handlers.QueueListener):
+    def __enter__(self) -> Self:
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+
+
+class ThreadRichHandler(RichHandler):
+    def __init__(self, *args, verbose: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.verbose = verbose
+
+    def render(
+        self, *, record: logging.LogRecord, traceback: Optional[Traceback], message_renderable: ConsoleRenderable
+    ) -> ConsoleRenderable:
+        assert isinstance(message_renderable, RichText)
+        if self.verbose:
+            highlighter = getattr(record, "highlighter", self.highlighter)
+            info = f"P={record.process:<5} T={record.thread:<5} "
+            if highlighter:
+                message = highlighter(info)
+            else:
+                message = RichText(info)
+            message.append_text(message_renderable)
+            message_renderable = message
+        return super().render(record=record, traceback=traceback, message_renderable=message_renderable)
+
+
+class MultiprocessingProcess(multiprocessing.get_context().Process):
+    def run(self) -> None:
+        try:
+            super().run()
+        except SystemExit:
+            raise
+        except KeyboardInterrupt:
+            thread = threading.get_ident()
+            logging.debug("KeyboardInterrupt in process %s thread %s ", self.name, thread)
+            sys.exit(1)
+        except BaseException as e:
+            thread = threading.get_ident()
+            logging.exception("%s in process %s thread %s ", type(e).__name__, self.name, thread)
+            sys.exit(1)
+
+
+def rich_sys_excepthook(type, value, traceback) -> None:
+    name = multiprocessing.current_process().name
+    exc_info = (type, value, traceback)
+    logging.error("%s ignored in %s", type.__name__, name, exc_info=exc_info)
+
+
+def rich_threading_excepthook(args: threading.ExceptHookArgs) -> None:
+    proc = multiprocessing.current_process()
+    exc_info = (args.exc_type, args.exc_value, args.exc_traceback)
+    threadname = None if args.thread is None else args.thread.name
+    logging.error("Thread %s in process %s interrupted", threadname, proc.name, exc_info=exc_info)
+
+
+def rich_sys_unraisablehook(unraisable) -> None:
+    """exc_type: Exception type.
+    exc_value: Exception value, can be None.
+    exc_traceback: Exception traceback, can be None.
+    err_msg: Error message, can be None.
+    object: Object causing the exception, can be None."""
+
+    exc_info = (unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback)
+    if isinstance(unraisable.exc_value, KeyboardInterrupt):
+        err_msg = unraisable.err_msg or "KeyboardInterrupt ignored in"
+        logging.debug("%s: %r", err_msg, unraisable.object)
+    else:
+        err_msg = unraisable.err_msg or "Exception ignored in"
+        logging.error("%s: %r", err_msg, unraisable.object, exc_info=exc_info)

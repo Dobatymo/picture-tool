@@ -11,6 +11,7 @@ import numpy as np
 from genutility.concurrency import parallel_map
 from genutility.filesystem import scandir_ext
 from genutility.pickle import read_pickle, write_pickle
+from typing_extensions import Self
 
 from picturetool.utils import extensions_images
 
@@ -30,7 +31,7 @@ class PictureWindow:
         cv2.startWindowThread()  # doesn't really do anything
         cv2.namedWindow(name, cv2.WINDOW_NORMAL)
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args):
