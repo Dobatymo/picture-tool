@@ -12,6 +12,7 @@ from genutility.pillow import NoActionNeeded, fix_orientation
 from PIL import Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
+from typing_extensions import Self
 
 register_heif_opener()
 
@@ -49,6 +50,14 @@ class QImageWithBuffer:
     def get_pixmap(self) -> QPixmapWithMeta:
         pixmap = QtGui.QPixmap.fromImage(self.image)
         return QPixmapWithMeta(pixmap, self.meta)
+
+    @property
+    def width(self) -> int:
+        return self.image.width()
+
+    @property
+    def height(self) -> int:
+        return self.image.height()
 
 
 def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -> Any:
@@ -222,7 +231,7 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
                 size * self.scale_factor, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
             )
 
-    def resize_pixmap(self, size: QtCore.QSize):
+    def resize_pixmap(self, size: QtCore.QSize) -> None:
         # don't overwrite `super().resize()` here by accident
         super().setPixmap(self._scaled_pixmap(size))
 
@@ -304,7 +313,7 @@ class PixmapViewer(QtWidgets.QScrollArea):
     label: AspectRatioPixmapLabel
     fit_to_window: bool
 
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.label = AspectRatioPixmapLabel(parent=parent)
         self.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
@@ -362,7 +371,7 @@ class PixmapViewer(QtWidgets.QScrollArea):
         else:
             super().keyPressEvent(event)
 
-    def wheelEvent(self, event: QtGui.QWheelEvent):
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         units = event.angleDelta().y()
         if event.modifiers() == QtCore.Qt.ControlModifier and units != 0:
             inc = 1 + (abs(units) / 120) * 0.2
@@ -426,7 +435,7 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
     """
 
     @QtCore.Slot(QtWidgets.QAction)
-    def on_triggered(self, action):
+    def on_triggered(self, action) -> None:
         logger.debug("%s", action)
 
 
@@ -473,7 +482,7 @@ def _grayscale(img: Image.Image) -> Image.Image:
 
 
 class TranslateTjException:
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -616,6 +625,8 @@ def rotate_save(path: Path, target: str) -> None:
 
     if target == "cw":
         op = turbojpeg.OP.ROT90
+    elif target == "180":
+        op = turbojpeg.OP.ROT180
     elif target == "ccw":
         op = turbojpeg.OP.ROT270
     else:

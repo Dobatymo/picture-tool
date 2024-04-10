@@ -47,7 +47,7 @@ def get_original_date(
 
     Input:
             `exif`: piexif exif info
-            `offset`: timezone offset in hours
+            `aslocal`: cnvert to local timezone
     """
 
     dates = get_exif_dates(exif)
@@ -101,9 +101,7 @@ def add_date(
         pass
 
     write_text(image, dt.isoformat(), align, fillcolor, outlinecolor, fontsize, padding)
-    kwargs = {
-        "exif": piexif.dump(exif),
-    }
+    kwargs = {"exif": piexif.dump(exif)}
 
     return image, kwargs
 
@@ -142,11 +140,7 @@ def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: O
 
             try:
                 image = fix_orientation(image, exif)
-                kwargs.update(
-                    {
-                        "exif": piexif.dump(exif),
-                    }
-                )
+                kwargs.update({"exif": piexif.dump(exif)})
                 modified = True
             except ValueError:
                 raise RotateFailed()
