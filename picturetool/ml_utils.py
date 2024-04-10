@@ -104,18 +104,16 @@ def faiss_duplicates_topk(
 @overload
 def faiss_duplicates_threshold(
     index: faiss.IndexFlat, batchsize: int, threshold: float, progress: Optional[Progress] = ...
-) -> Iterator[Tuple[int, int, float]]:
-    ...
+) -> Iterator[Tuple[int, int, float]]: ...
 
 
 @overload
 def faiss_duplicates_threshold(
     index: faiss.IndexBinary, batchsize: int, threshold: int, progress: Optional[Progress] = ...
-) -> Iterator[Tuple[int, int, float]]:
-    ...
+) -> Iterator[Tuple[int, int, float]]: ...
 
 
-def faiss_duplicates_threshold(index, batchsize, threshold, progress: Optional[Progress] = None):
+def faiss_duplicates_threshold(index, batchsize, threshold, progress=None):
     if batchsize < 1:
         raise ValueError(f"batchsize must be >= 1 (it's {batchsize})")
 
@@ -166,11 +164,7 @@ def faiss_duplicates_threshold_pairs(
 
 
 def faiss_duplicates_topk_pairs(
-    metric: str,
-    arr: Union[np.ndarray, Iterable[np.ndarray]],
-    topk: int,
-    chunksize: int,
-    progress: Progress,
+    metric: str, arr: Union[np.ndarray, Iterable[np.ndarray]], topk: int, chunksize: int, progress: Progress
 ) -> np.ndarray:
     index = faiss_from_array(arr, metric)
     pairs, dists = faiss_to_pairs(faiss_duplicates_topk(index, chunksize, topk, progress))

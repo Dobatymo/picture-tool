@@ -1,14 +1,15 @@
 # picture-tool
 
-- Add date stamps to pictures. The date/time is read from the EXIF information.
-- Resize and rotate
+This is a collection of several picture/image/photo related software.
 
-## Setup
+## quality.py
+
+### Setup
 
 Download cv2 models
 
-- `certutil.exe -urlcache -split -f "https://github.com/opencv/opencv_contrib/raw/master/modules/quality/samples/brisque_range_live.yml" brisque_range_live.yml`
-- `certutil.exe -urlcache -split -f "https://github.com/opencv/opencv_contrib/raw/master/modules/quality/samples/brisque_model_live.yml" brisque_model_live.yml`
+- `curl https://raw.githubusercontent.com/opencv/opencv_contrib/master/modules/quality/samples/brisque_range_live.yml -o brisque_range_live.yml`
+- `curl https://raw.githubusercontent.com/opencv/opencv_contrib/master/modules/quality/samples/brisque_model_live.yml -o brisque_model_live.yml`
 
 ## Statistics
 
@@ -68,7 +69,7 @@ Find all pictures taken by a Canon EOS camera using SQL query.
 
 - support metadata: filesystem, Exif, IPTC, XMP, ...
 - support inferred metadata: technical/aesthetic quality score, orientation, persons, setting, objects
-- manual meta data: notes, personal-score, photographer
+- manual meta data: notes, personal-score, photographer name
 
 - GUI/CLI: support SQL syntax for finding and mass updating images and metadata
 	- rename files: `UPDATE /images/2022-01-01 SET filename = format("$date ($camera)", date, camera) WHERE camera = NIKON`
@@ -119,29 +120,3 @@ optional arguments:
   --overwrite-cache     Update cached values (default: False)
   --version             show program's version number and exit
 ```
-
-### Alternatives
-- idealo/imagededup. pros: CNN, cons: memory issues with CNN...
-- elisemercury/Duplicate-Image-Finder. cons: no multiprocessing
-- InexplicableMagic/photodedupe. Rust.
-- jesjimher/imgdupes
-- rif/imgdup2go
-- markusressel/py-image-dedup
-- opennota/findimagedupes
-- magamig/duplicate-images-finder
-- DragonOfMath/dupe-images. node.js.
-- knjcode/imgdupes
-
-### Todo
-- folder modes: multiple folder inputs, combine them  or treat all of them separately. two folder mode: find dups from first folder in second, but not within the same folder
-- ignore files based on meta data, ie. filesize, resolution, ...
-
-## Alternatives
-- ACDSee Photo Studio (Windows 7+)
-- Microsoft Photos (Windows 8+)
-- Apple Photos
-- XnView MP (Windows 7+, Mac 10.13+, Linux)
-- Adobe Lightroom Classic
-
-## Resources
-- https://rmlint.readthedocs.io/en/latest/cautions.html

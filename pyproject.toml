@@ -8,19 +8,10 @@ packages = [
     {include = "picturetool"},
 ]
 
-[[tool.poetry.source]]
-name = "pypi-dlib-bin"
-url = "https://pypi.org/simple/dlib-bin/"
-priority = "explicit"
-
-[[tool.poetry.source]]
-name = "PyPI"
-priority = "primary"
-
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
 filemeta = ">=0.0.2"
-genutility = {version = ">=0.0.102", extras = ["filesdb", "numpy", "pickle", "pillow"]}
+genutility = {version = ">=0.0.103", extras = ["callbacks", "datetime", "filesdb", "numpy", "pickle", "pillow", "rich", "time"]}
 humanize = ">=4.4.0"
 imagehash = ">=4.3.1"
 msgpack = ">=1.0.4"
@@ -43,7 +34,9 @@ rich-argparse = "^1.2.0"
 geopy = ">=2.3.0"
 more-itertools = ">=5.0.0"
 houtu = "^0.0.2"
-dlib = {version = ">=19.24", source = "pypi-dlib-bin", optional = true}
+typing-extensions = ">=4.0.0"
+concurrex = {version = ">=0.0.1", optional = true}
+dlib = {version = ">=19.24", optional = true}
 face-recognition = {version = "1.3.0", optional = true}
 faiss-cpu = {version = ">=1.7.3", optional = true}
 #Gooey = {version = ">=1.0", optional = true}
@@ -52,9 +45,9 @@ turbojpeg = {version = ">=0.0.1", optional = true}
 keras = {version = ">=2.4.0", optional = true}
 kornia = {version = ">=0.6.9", optional = true}
 lightning = {version = ">=2.0.0", optional = true}
-opencv-python = {version = "4.5.4.60", optional = true}
 opencv-contrib-python = {version = "4.5.4.60", optional = true}
 piq = {version = ">=0.7.0", optional = true}
+pyiqa = {version = "^0.1.10", optional = true}
 pyside2 = {version = ">=5.15.2.1", optional = true}
 scikit-image = {version = "<0.19", optional = true}
 tensorflow = {version = ">=2.3.0", optional = true}
@@ -62,10 +55,10 @@ torch = {version = ">=1.13.1", optional = true}
 torchvision = {version = ">=0.14.1", optional = true}
 torchmetrics = {version = ">=0.11.4", optional = true}
 transformers = {version = ">=4.26.1", optional = true}
-typing-extensions = ">=4.0.0"
+scikit-video = {version = "^1.1.11", optional = true}
 
 [tool.poetry.extras]
-ml = ["dlib", "face-recognition", "faiss-cpu", "image-quality", "turbojpeg", "kornia", "lightning", "opencv-python", "opencv-contrib-python", "piq", "scikit-image", "torch", "torchvision", "torchmetrics", "transformers"]
+ml = ["concurrex", "dlib", "face-recognition", "faiss-cpu", "image-quality", "turbojpeg", "kornia", "lightning", "opencv-contrib-python", "piq", "pyiqa", "scikit-image", "torch", "torchvision", "torchmetrics", "transformers"]
 ml_tf = ["keras", "tensorflow"]
 gui = ["pyside2"]
 
@@ -83,6 +76,9 @@ py-cpuinfo = ">=9.0.0"
 [tool.black]
 line-length = 120
 
+[tool.ruff]
+line-length = 120
+
 [tool.isort]
 profile = "black"
 src_paths = ["."]
@@ -97,6 +93,9 @@ warn_unreachable = true
 
 [tool.bandit]
 skips = ["B101"]
+
+[tool.poetry-pyinstaller-plugin.scripts]
+viewer-gui = { source = "scripts/viewer-gui.py", type = "onedir", bundle = false }
 
 [build-system]
 build-backend = "poetry.core.masonry.api"

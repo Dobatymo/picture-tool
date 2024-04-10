@@ -1,8 +1,17 @@
 import logging
+from argparse import ArgumentParser
+from collections import defaultdict
+from os import fspath
 from typing import DefaultDict, Set, Tuple
 
 from filemeta.mediainfo import MediaInfoFields
+
+# from pprint import pprint
+from genutility.args import is_dir
 from genutility.exceptions import ParseError
+from genutility.filesystem import fileextensions, scandir_ext
+from genutility.rich import Progress
+from rich.progress import Progress as RichProgress
 
 logger = logging.getLogger()
 
@@ -12,15 +21,6 @@ def scandir_error_log(entry, exception):
 
 
 if __name__ == "__main__":
-    from argparse import ArgumentParser
-    from collections import defaultdict
-    from os import fspath
-
-    # from pprint import pprint
-    from genutility.args import is_dir
-    from genutility.filesystem import fileextensions, scandir_ext
-    from genutility.iter import progress
-
     parser = ArgumentParser()
     parser.add_argument("path", nargs="+", type=is_dir)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -49,16 +49,18 @@ if __name__ == "__main__":
     extensions = {"." + ext for ext in fileextensions.video + fileextensions.audio + fileextensions.images}
     unhandled_keys: DefaultDict[str, Set[Tuple[str, str]]] = defaultdict(set)
 
-    for path in args.path:
-        for path in progress(scandir_ext(path, extensions, errorfunc=scandir_error_log)):
-            try:
-                values = dict(mif.mediainfo(fspath(path), unhandled_keys))
-            except ParseError as e:
-                logger.error("%s failed to parse: %s", path, e)
-                continue
+    with RichProgress() as progress:
+        p = Progress(progress)
+        for path in args.path:
+            for path in p.track(scandir_ext(path, extensions, errorfunc=scandir_error_log)):
+                try:
+                    values = dict(mif.mediainfo(fspath(path), unhandled_keys))
+                except ParseError as e:
+                    logger.error("%s failed to parse: %s", path, e)
+                    continue
 
-            # pprint(path)
-            # pprint(values)
-            # print("---")
+                # pprint(path)
+                # pprint(values)
+                # print("---")
 
     mif.persist()

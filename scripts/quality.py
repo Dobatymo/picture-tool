@@ -1,19 +1,45 @@
+import csv
+import logging
 import os
 from argparse import ArgumentParser
+from itertools import islice
+from pathlib import Path
 from typing import Dict
 
-import cv2  # pip install opencv-contrib-python
+import cv2
 import kornia.filters
 import numpy as np
 import piq
+import pyiqa
+import skvideo.measure
 from genutility.args import is_dir
 from genutility.filesystem import scandir_ext
-
-# from imquality import brisque  # pip install image-quality
+from genutility.rich import Progress
+from imquality import brisque
 from PIL import Image
+from rich.logging import RichHandler
+from rich.progress import Progress as RichProgress
 from torchvision.transforms import functional as f
+from typing_extensions import Self
 
 from picturetool.utils import extensions_images
+
+LOG_STR = "Failed to run %r on %r"
+
+
+class LogException:
+    def __init__(self, s: str, *args) -> None:
+        self.s = s
+        self.args = args
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is not None:
+            if isinstance(exc_value, Exception):
+                logging.exception(self.s, *self.args)  # , exc_info=
+                return True
 
 
 def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
@@ -41,44 +67,107 @@ def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
 
 
 def cv2_iqa_score(path: str) -> Dict[str, float]:
+    ret = {}
+
     img = cv2.imread(path)
     grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    blur_score = cv2.Laplacian(grey, cv2.CV_64F).var(ddof=0)
-    brisque_score = cv2.quality.QualityBRISQUE_compute(img, "brisque_model_live.yml", "brisque_range_live.yml")
-    tv_score = np_total_variation(img).item()
+    with LogException(LOG_STR, "cv2.Laplacian", path):
+        ret["blur-cv"] = cv2.Laplacian(grey, cv2.CV_64F).var(ddof=0)
+    with LogException(LOG_STR, "cv2.quality.QualityBRISQUE_compute", path):
+        ret["brisque-cv"] = cv2.quality.QualityBRISQUE_compute(img, "brisque_model_live.yml", "brisque_range_live.yml")[
+            0
+        ]
+    with LogException(LOG_STR, "np_total_variation", path):
+        ret["tv-np"] = np_total_variation(img).item()
 
-    return {"blur_score": blur_score, "brisque_score": brisque_score[0], "tv_score": tv_score}
+    return ret
+
+
+niqe_metric = pyiqa.create_metric("niqe")
+brisque_metric = pyiqa.create_metric("brisque")
+nima_metric = pyiqa.create_metric("nima")
 
 
 def torch_iqa_score(path: str) -> Dict[str, float]:
+    ret = {}
+
     with Image.open(path) as img:
         x = f.to_tensor(img).unsqueeze(0)
-    grey = f.rgb_to_grayscale(x)
+        grey = f.rgb_to_grayscale(x)
 
-    blur_score = kornia.filters.laplacian(grey, 3).var(unbiased=False).item()
-    brisque_score = piq.brisque(x, data_range=1.0).item()
-    tv_score = piq.total_variation(x, reduction="none").item()
+        with LogException(LOG_STR, "kornia.filters.laplacian", path):
+            ret["blur-kornia"] = kornia.filters.laplacian(grey, 3).var(unbiased=False).item()
+        with LogException(LOG_STR, "piq.brisque", path):
+            ret["brisque-piq"] = piq.brisque(x, data_range=1.0).item()
+        with LogException(LOG_STR, "piq.total_variation", path):
+            ret["tv-piq"] = piq.total_variation(x, reduction="none").item()
+        with LogException(LOG_STR, "pyiqa.create_metric('niqe')", path):
+            ret["niqe-pyiqa"] = niqe_metric(x).item()
+        with LogException(LOG_STR, "pyiqa.create_metric('brisque')", path):
+            ret["brisque-pyiqa"] = brisque_metric(x).item()
+        with LogException(LOG_STR, "pyiqa.create_metric('nima')", path):
+            ret["nima-pyiqa"] = nima_metric(x).item()
 
-    return {"blur_score": blur_score, "brisque_score": brisque_score, "tv_score": tv_score}
+    return ret
+
+
+def other_iqa_scires(path: str) -> Dict[str, float]:
+    ret = {}
+    with Image.open(path) as img:
+        with LogException(LOG_STR, "brisque.score", path):
+            ret["brisque-imquality"] = brisque.score(img)
+        with LogException(LOG_STR, "skvideo.measure.niqe", path):
+            video = np.array(img.convert("YCbCr"))[None, :, :, 1]
+            ret["niqe-skvideo"] = skvideo.measure.niqe(video)
+
+    return ret
 
 
 def main():
     parser = ArgumentParser()
     parser.add_argument("directory", type=is_dir)
     parser.add_argument("--extensions", nargs="+", default=extensions_images)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+
+    handler = RichHandler(log_time_format="%Y-%m-%d %H-%M-%S%Z")
+    FORMAT = "%(message)s"
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG, format=FORMAT, handlers=[handler])
+    else:
+        logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[handler])
 
     it = scandir_ext(args.directory, args.extensions)
 
-    for path in it:
-        d = cv2_iqa_score(os.fspath(path))
-        print("cv2", path.name, d)
-        d = torch_iqa_score(os.fspath(path))
-        print("torch", path.name, d)
-        # with Image.open(path) as img:
-        #    score = brisque.score(img)
-        # print(path, d['brisque_score'], score)
+    with open(args.out, "w", encoding="utf-8", newline="") as csvfile, RichProgress() as progress:
+        p = Progress(progress)
+        fieldnames = [
+            "blur-cv",
+            "brisque-cv",
+            "tv-np",
+            "blur-kornia",
+            "brisque-piq",
+            "tv-piq",
+            "niqe-pyiqa",
+            "brisque-pyiqa",
+            "nima-pyiqa",
+            "brisque-imquality",
+            "niqe-skvideo",
+        ]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for path in islice(p.track(it), args.limit):
+            with LogException("Failed to process '%s'", path):
+                row = {}
+                for func in [cv2_iqa_score, torch_iqa_score, other_iqa_scires]:
+                    d = func(os.fspath(path))
+                    row.update(d)
+                writer.writerow(row)
 
 
 if __name__ == "__main__":

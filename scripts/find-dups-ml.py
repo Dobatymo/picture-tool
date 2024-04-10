@@ -8,6 +8,7 @@ from typing import Iterable, Iterator, List, Tuple
 import numpy as np
 import torch
 import transformers
+from concurrex.thread import ThreadedIterator
 from genutility.args import is_dir
 from genutility.file import StdoutFile
 from genutility.filesystem import scandir_ext
@@ -21,7 +22,7 @@ from transformers.models.vit.feature_extraction_vit import ViTFeatureExtractor
 from transformers.models.vit.modeling_vit import ViTModel
 
 from picturetool.ml_utils import faiss_duplicates_threshold_pairs
-from picturetool.utils import CollectingIterable, ThreadedIterator, extensions_images
+from picturetool.utils import CollectingIterable, extensions_images
 
 DEFAULT_VIT_MODEL = "nateraw/vit-base-beans"
 

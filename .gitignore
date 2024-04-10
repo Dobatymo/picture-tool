@@ -15,3 +15,7 @@ dist-dlib/
 
 # dev cache
 lightning_logs/
+
+# profiling
+*.lprof
+*.prof

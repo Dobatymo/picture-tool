@@ -8,6 +8,7 @@ import numpy as np
 import numpy.typing as npt
 from genutility.numpy import broadcast_shapes, get_num_chunks
 from threadpoolctl import threadpool_limits
+from typing_extensions import Self
 
 Shape = Tuple[int, ...]
 Indices = Tuple[slice, ...]
@@ -186,7 +187,7 @@ class SharedNdarray:
             shm_buf = self.shm.buf[: self.nbytes].hex()
         return f"<SharedNdarray shm.name={self.shm.name} shape={self.shape} dtype={self.dtype.name} strides={self.strides} shm.buf={shm_buf}>"
 
-    def __enter__(self) -> "SharedNdarray":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args) -> None:
