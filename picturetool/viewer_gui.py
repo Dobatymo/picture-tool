@@ -37,6 +37,7 @@ T = TypeVar("T")
 IMAGE_LOADER_NUM_WORKERS = 2
 IMAGE_CACHE_SIZE = 10
 UNDO_LIST_SIZE = 10
+QT_DEFAULT_WINDOW_FLAGS = QtCore.Qt.WindowFlags()
 _grayscale.__name__ = "grayscale"
 
 
@@ -162,7 +163,7 @@ class PictureCache(QtCore.QObject):
             self.pic_load_skipped.emit(path)
             return
         else:
-            assert False
+            assert False  # noqa: B011
 
         try:
             image = future.result()
@@ -289,7 +290,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         resolve_city_names: bool,
         config: dict,
         parent: Optional[QtWidgets.QWidget] = None,
-        flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags(),
+        flags: QtCore.Qt.WindowFlags = QT_DEFAULT_WINDOW_FLAGS,
     ) -> None:
         super().__init__(parent, flags)
 
@@ -663,9 +664,11 @@ class PictureWindow(QtWidgets.QMainWindow):
             path: Path = self.loaded["path"]
             self.load_pictures([path])
 
+    @classmethod
     @lru_cache(1000)
-    def get_location(self, lat: Sequence[Fraction], lon: Sequence[Fraction]) -> Optional[str]:
-        coords, distance, city = self.rg.lat_lon(gps_dms_to_dd(lat), gps_dms_to_dd(lon), "degrees")
+    def get_location(cls, lat: Sequence[Fraction], lon: Sequence[Fraction]) -> Optional[str]:
+        assert cls.rg is not None
+        coords, distance, city = cls.rg.lat_lon(gps_dms_to_dd(lat), gps_dms_to_dd(lon), "degrees")
         return city.name
 
     def make_cam_info_string(self, meta: Dict[str, Any]) -> str:

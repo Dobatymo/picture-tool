@@ -9,11 +9,25 @@ import sys
 import threading
 from datetime import datetime, timedelta, tzinfo
 from fractions import Fraction
-from functools import total_ordering
+from functools import total_ordering, wraps
 from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypedDict, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    TypeVar,
+    Union,
+)
 
 import networkx as nx
 import numpy as np
@@ -53,6 +67,14 @@ extensions_jpeg = {".jpg", ".jpeg"}
 extensions_heif = {".heic", ".heif"}
 extensions_tiff = {".tif", ".tiff", ".dng"}
 extensions_exif = extensions_jpeg | extensions_heif | extensions_tiff
+
+
+def rpartial(func: Callable, *bind_args: Any) -> Callable:
+    @wraps(func)
+    def inner(*args):
+        return func(*args, *bind_args)
+
+    return inner
 
 
 def _gps_tuple_to_fraction(gps: GpsT) -> Fraction:
@@ -685,7 +707,7 @@ class MultiprocessingProcess(multiprocessing.get_context().Process):
             thread = threading.get_ident()
             logging.debug("KeyboardInterrupt in process %s thread %s ", self.name, thread)
             sys.exit(1)
-        except BaseException as e:
+        except BaseException as e:  # noqa: B036
             thread = threading.get_ident()
             logging.exception("%s in process %s thread %s ", type(e).__name__, self.name, thread)
             sys.exit(1)

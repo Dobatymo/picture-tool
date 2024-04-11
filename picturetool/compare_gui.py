@@ -3,7 +3,7 @@ import logging
 import os.path
 from collections import defaultdict
 from datetime import timedelta, timezone
-from functools import lru_cache, partial, wraps
+from functools import lru_cache, partial
 from inspect import signature
 from itertools import chain
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -23,9 +23,12 @@ from .utils import (
     open_using_default_app,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
+    rpartial,
     show_in_file_manager,
     to_datetime,
 )
+
+QT_DEFAULT_WINDOW_FLAGS = QtCore.Qt.WindowFlags()
 
 
 def get_priorities(df: pd.DataFrame) -> np.ndarray:
@@ -520,12 +523,8 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
             dtype = type(self.df.dtypes[self.df.columns.get_loc(col)])
             func = functions[(dtype, strfunc)]
-
             argstr = ", ".join(map(repr, args))
-
-            @wraps(func)
-            def keyfunc(col):
-                return func(col, *args)
+            keyfunc = rpartial(func, *args)
 
             try:
                 # df.sort_values() eats exceptions in key function, so test first
@@ -592,7 +591,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
 class PrioritizeWindow(QtWidgets.QMainWindow):
     def __init__(
-        self, df, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags()
+        self, df, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QT_DEFAULT_WINDOW_FLAGS
     ) -> None:
         super().__init__(parent, flags)
 
@@ -741,7 +740,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self,
         pic_cache_size: int,
         parent: Optional[QtWidgets.QWidget] = None,
-        flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags(),
+        flags: QtCore.Qt.WindowFlags = QT_DEFAULT_WINDOW_FLAGS,
     ) -> None:
         super().__init__(parent, flags)
 
@@ -995,7 +994,7 @@ class TableWindow(QtWidgets.QMainWindow):
         app_name: str,
         pic_cache_size: int,
         parent: Optional[QtWidgets.QWidget] = None,
-        flags: QtCore.Qt.WindowFlags = QtCore.Qt.WindowFlags(),
+        flags: QtCore.Qt.WindowFlags = QT_DEFAULT_WINDOW_FLAGS,
     ):
         super().__init__(parent, flags)
         self.filename: Optional[str] = None

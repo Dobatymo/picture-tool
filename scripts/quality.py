@@ -126,11 +126,12 @@ def other_iqa_scires(path: str) -> Dict[str, float]:
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("directory", type=is_dir)
+    parser.add_argument("path", type=is_dir, help="Input directory")
     parser.add_argument("--extensions", nargs="+", default=extensions_images)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively.")
+    parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
     handler = RichHandler(log_time_format="%Y-%m-%d %H-%M-%S%Z")
@@ -141,11 +142,14 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[handler])
 
-    it = scandir_ext(args.directory, args.extensions)
+    it = scandir_ext(args.path, args.extensions, rec=args.recursive)
 
     with open(args.out, "w", encoding="utf-8", newline="") as csvfile, RichProgress() as progress:
         p = Progress(progress)
         fieldnames = [
+            "path",
+            "filesize",
+            "mod_time",
             "blur-cv",
             "brisque-cv",
             "tv-np",
@@ -161,11 +165,14 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        for path in islice(p.track(it), args.limit):
+        for entity in islice(p.track(it), args.limit):
+            path = os.fspath(entity)
+            filesize = entity.stat().st_size
+            mod_time = entity.stat().st_mtime_ns
             with LogException("Failed to process '%s'", path):
-                row = {}
+                row = {"path": path, "filesize": filesize, "mod_time": mod_time}
                 for func in [cv2_iqa_score, torch_iqa_score, other_iqa_scires]:
-                    d = func(os.fspath(path))
+                    d = func(path)
                     row.update(d)
                 writer.writerow(row)
 
