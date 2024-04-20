@@ -1,5 +1,6 @@
 import logging
 import os
+import webbrowser
 from collections import Counter, deque
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from datetime import timedelta
@@ -10,7 +11,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
 from typing import Counter as CounterT
-from typing import Deque, Dict, Generic, List, Optional, Sequence, Set, Tuple, Type, TypeVar
+from typing import Deque, Dict, Generic, List, NamedTuple, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 import humanize
 from genutility.time import MeasureTime
@@ -39,6 +40,11 @@ IMAGE_CACHE_SIZE = 10
 UNDO_LIST_SIZE = 10
 QT_DEFAULT_WINDOW_FLAGS = QtCore.Qt.WindowFlags()
 _grayscale.__name__ = "grayscale"
+
+
+class GpsDms(NamedTuple):
+    lat: Sequence[Fraction]
+    lon: Sequence[Fraction]
 
 
 def gps_dms_to_dd(dms: Sequence[Fraction]) -> float:
@@ -432,8 +438,15 @@ class PictureWindow(QtWidgets.QMainWindow):
         action_undo.triggered[bool].connect(self.on_undo)
 
         actions_menu = self.menu.addMenu("&Actions")
-        edit_menu.menuAction().setStatusTip("Global actions")
+        actions_menu.menuAction().setStatusTip("Global actions")
         actions_menu.addAction(action_undo)
+
+        self.action_google_maps = QtWidgets.QAction("&Google Maps", self)
+        self.action_google_maps.triggered[bool].connect(self.on_google_maps)
+
+        web_menu = self.menu.addMenu("&Web")
+        web_menu.menuAction().setStatusTip("Web links")
+        web_menu.addAction(self.action_google_maps)
 
         self.cache = PictureCache(self.cache_size)
         self.cache.pic_loaded.connect(self.on_pic_loaded)
@@ -470,6 +483,17 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         self.actions: Deque = deque(maxlen=UNDO_LIST_SIZE)
 
+    def _gps(self) -> GpsDms:
+        assert self.loaded is not None
+
+        meta = self.loaded["meta"]
+        lat = meta.get("gps-lat")
+        lon = meta.get("gps-lon")
+        if lat and lon:
+            return GpsDms(lat, lon)
+        else:
+            raise ValueError("GPS not available")
+
     def busy_add(self):
         if self.num_busy == 0:
             self.setCursor(QtCore.Qt.BusyCursor)
@@ -491,6 +515,8 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_make.setText(None)
         self.statusbar_model.setText(None)
         self.statusbar_info.setText(None)
+        self.action_google_maps.setEnabled(False)
+
         self.viewer.clear()
 
     def _get_pic_paths(self, path: Path) -> List[Path]:
@@ -671,11 +697,16 @@ class PictureWindow(QtWidgets.QMainWindow):
         return city.name
 
     def make_cam_info_string(self, meta: Dict[str, Any]) -> str:
-        if self.resolve_city_names and meta.get("gps-lat") and meta.get("gps-lon"):
-            with MeasureTime() as stopwatch:
-                meta["city"] = self.get_location(meta["gps-lat"], meta["gps-lon"])
-                time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-            logging.debug("Resolving GPS coordinates took %s", time_delta)
+        if self.resolve_city_names:
+            try:
+                lat, lon = self._gps()
+            except ValueError:
+                pass
+            else:
+                with MeasureTime() as stopwatch:
+                    meta["city"] = self.get_location(lat, lon)
+                    time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
+                logging.debug("Resolving GPS coordinates took %s", time_delta)
 
         vals = {
             "FL (mm)": "focal-length",
@@ -705,7 +736,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(Path, QImageWithBuffer)
     def on_pic_loaded(self, path: Path, image: QImageWithBuffer) -> None:
         idx = self.paths.index(path)
-        self.loaded = {"path": path, "idx": idx}
+        self.loaded = {"path": path, "idx": idx, "meta": image.meta}
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
         self.statusbar_filename.setText(path.name)
@@ -714,6 +745,13 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_make.setText(image.meta.get("make"))
         self.statusbar_model.setText(image.meta.get("model"))
         self.statusbar_info.setText(self.make_cam_info_string(image.meta))
+
+        try:
+            self._gps()
+        except ValueError:
+            pass
+        else:
+            self.action_google_maps.setEnabled(True)
 
         self.viewer.setPixmap(image.get_pixmap())
         self.busy_sub()
@@ -848,6 +886,18 @@ class PictureWindow(QtWidgets.QMainWindow):
             pass
         else:
             assert False
+
+    @QtCore.Slot()
+    def on_google_maps(self) -> None:
+        try:
+            lat, lon = self._gps()
+        except ValueError:
+            return
+
+        lat = gps_dms_to_dd(lat)
+        lon = gps_dms_to_dd(lon)
+        url = f"https://www.google.com/maps?q={lat},{lon}"
+        webbrowser.open(url)
 
     @QtCore.Slot()
     def on_crop_top(self) -> None:

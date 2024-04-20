@@ -51,8 +51,8 @@ if __name__ == "__main__":
 
     with RichProgress() as progress:
         p = Progress(progress)
-        for path in args.path:
-            for path in p.track(scandir_ext(path, extensions, errorfunc=scandir_error_log)):
+        for basepath in args.path:
+            for path in p.track(scandir_ext(basepath, extensions, errorfunc=scandir_error_log)):
                 try:
                     values = dict(mif.mediainfo(fspath(path), unhandled_keys))
                 except ParseError as e:
