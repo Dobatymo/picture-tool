@@ -116,7 +116,7 @@ class ExifDialog(QDialog):
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["IFD", "Name", "Value"])
 
-        for ifd, key, key_label, value, value_label in exif_table(os.fspath(path)):
+        for ifd, _key, key_label, _value, value_label in exif_table(os.fspath(path)):
             self.add_row(ifd, key_label, value_label)
 
         self.layout = QVBoxLayout()
@@ -380,7 +380,7 @@ class MyWidget(QWidget):
         sortedbydistance = sorted(iterdirs_with_distances())
 
         self.viewer.clear()
-        for distance, path in sortedbydistance:
+        for _distance, path in sortedbydistance:
             self.viewer.addItemFromPath(path)
 
     def name2longlat(self, name: str) -> None:
