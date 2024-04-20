@@ -22,7 +22,7 @@ from picturetool.utils import extensions_images
 
 
 def preview(dataset: Dataset) -> None:
-    for i, (img, label) in enumerate(dataset):
+    for _i, (img, label) in enumerate(dataset):
         orientation = [1, 6, 3, 8][label]
         # print(i, label, orientation)
         try:
