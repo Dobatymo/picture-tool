@@ -13,6 +13,7 @@ python = ">=3.8,<3.11"
 filemeta = ">=0.0.2"
 genutility = {version = ">=0.0.103", extras = ["callbacks", "datetime", "filesdb", "numpy", "pickle", "pillow", "rich", "time"]}
 humanize = ">=4.4.0"
+houtu = "^0.0.2"
 imagehash = ">=4.3.1"
 msgpack = ">=1.0.4"
 natsort = ">=8.2.0"
@@ -33,7 +34,7 @@ rich = ">=12.0.0"
 rich-argparse = "^1.2.0"
 geopy = ">=2.3.0"
 more-itertools = ">=5.0.0"
-houtu = "^0.0.2"
+rawpy = "^0.19.1"
 typing-extensions = ">=4.0.0"
 concurrex = {version = ">=0.0.1", optional = true}
 dlib = {version = ">=19.24", optional = true}
@@ -81,7 +82,7 @@ line-length = 120
 
 [tool.isort]
 profile = "black"
-src_paths = ["."]
+src_paths = ["picturetool"]
 line_length = 120
 
 [tool.mypy]
@@ -95,7 +96,7 @@ warn_unreachable = true
 skips = ["B101"]
 
 [tool.poetry-pyinstaller-plugin.scripts]
-viewer-gui = { source = "scripts/viewer-gui.py", type = "onedir", bundle = false }
+viewer-gui = { source = "scripts/viewer-gui.py", type = "onedir", bundle = false, windowed = true }
 
 [build-system]
 build-backend = "poetry.core.masonry.api"

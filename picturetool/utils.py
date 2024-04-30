@@ -62,10 +62,13 @@ DEFAULT_HASHDB = DEFAULT_APPDATA_DIR / "hashes.sqlite"
 
 GpsT = Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]
 
-extensions_images = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".dng", ".heic", ".heif", ".webp"}
+extensions_raw = {".dng", ".arw", ".nef", ".cr2", ".cr3"}
 extensions_jpeg = {".jpg", ".jpeg"}
 extensions_heif = {".heic", ".heif"}
-extensions_tiff = {".tif", ".tiff", ".dng"}
+extensions_images = (
+    {".bmp", ".gif", ".png", ".tif", ".tiff", ".webp"} | extensions_raw | extensions_jpeg | extensions_heif
+)
+extensions_tiff = {".tif", ".tiff", ".dng", ".arw", ".nef", ".cr2"}
 extensions_exif = extensions_jpeg | extensions_heif | extensions_tiff
 
 
