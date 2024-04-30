@@ -32,7 +32,9 @@ from .shared_gui import (
     read_qt_image,
     rotate_save,
 )
-from .utils import MyFraction, extensions_images
+from .utils import MyFraction, extensions_images, show_in_file_manager
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 IMAGE_LOADER_NUM_WORKERS = 2
@@ -60,13 +62,13 @@ def nice_meta(obj: Any) -> Any:
 
 
 class PictureCache(QtCore.QObject):
-    pic_loaded = QtCore.Signal(Path, QImageWithBuffer)
-    pic_load_failed = QtCore.Signal(Path, Exception)
-    pic_load_skipped = QtCore.Signal(Path)
+    pic_loaded = QtCore.Signal(Path, int, QImageWithBuffer)
+    pic_load_failed = QtCore.Signal(Path, int, Exception)
+    pic_load_skipped = QtCore.Signal(Path, int)
 
     process: List[ImageTransformT]
-    outstanding_loads: Deque[Tuple[Path, Tuple[ImageTransformT, ...]]]
-    ignored_loads: CounterT[Tuple[Path, Tuple[ImageTransformT, ...]]]
+    outstanding_loads: Deque[Tuple[Path, int, Tuple[ImageTransformT, ...]]]
+    ignored_loads: CounterT[Tuple[Path, int, Tuple[ImageTransformT, ...]]]
 
     def __init__(self, size: Optional[int] = None) -> None:
         super().__init__()
@@ -78,13 +80,13 @@ class PictureCache(QtCore.QObject):
         self.futures: Set[Future] = set()  # set of non-cached futures
         self.futures_lock = Lock()
 
-    def _call(self, path: Path, process: Tuple[ImageTransformT, ...]) -> Future:
-        future = self.executor.submit(read_qt_image, os.fspath(path), process=process)
+    def _call(self, path: Path, frame: int, process: Tuple[ImageTransformT, ...]) -> Future:
+        future = self.executor.submit(read_qt_image, path, frame, process)
         with self.futures_lock:
             self.futures.add(future)
         return future
 
-    def put(self, path: Path) -> None:
+    def put(self, path: Path, frame: int = 0) -> None:
         """Put image in cache using threadpool.
         If the image is already in the cache, do nothing.
 
@@ -94,15 +96,15 @@ class PictureCache(QtCore.QObject):
         """
 
         process = tuple(self.process)
-        logging.debug("Cache put <%s> %r", path, process)
+        logger.debug("Cache put <%s> [frame=%d] %r", path, frame, process)
         try:
-            future = self.get(path, process)
+            future = self.get(path, frame, process)
         except RuntimeError as e:
-            logging.info("Failed to put to cache: %s", e)
+            logger.info("Failed to put to cache: %s", e)
         else:
-            future.add_done_callback(partial(self.on_put_done, path, process))
+            future.add_done_callback(partial(self.on_put_done, path, frame, process))
 
-    def load(self, path: Path) -> None:
+    def load(self, path: Path, frame: int = 0) -> None:
         """Load image using threadpool.
         If the image is not in the cache yet, put it there.
 
@@ -112,14 +114,14 @@ class PictureCache(QtCore.QObject):
         """
 
         process = tuple(self.process)
-        logging.debug("Cache load <%s> %r", path, process)
-        self.outstanding_loads.append((path, process))
+        logger.debug("Cache load <%s> [frame=%d] %r", path, frame, process)
+        self.outstanding_loads.append((path, frame, process))
         try:
-            future = self.get(path, process)
+            future = self.get(path, frame, process)
         except RuntimeError as e:
-            logging.info("Failed to load from cache: %s", e)
+            logger.info("Failed to load from cache: %s", e)
         else:
-            future.add_done_callback(partial(self.on_load_done, path, process))
+            future.add_done_callback(partial(self.on_load_done, path, frame, process))
 
     def cache_info(self) -> _CacheInfo:
         return self.get.cache_info()
@@ -127,7 +129,7 @@ class PictureCache(QtCore.QObject):
     def cache_clear(self) -> None:
         self.get.cache_clear()
 
-    def on_put_done(self, path: Path, process: Tuple[ImageTransformT, ...], future: Future) -> None:
+    def on_put_done(self, path: Path, frame: int, process: Tuple[ImageTransformT, ...], future: Future) -> None:
         try:
             with self.futures_lock:
                 self.futures.remove(future)
@@ -137,13 +139,13 @@ class PictureCache(QtCore.QObject):
 
         try:
             future.result()
-            logging.debug("Cache put fulfilled (cached=%s) <%s> %r", cached, path, process)
+            logger.debug("Cache put fulfilled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
         except CancelledError:
-            logging.debug("Cache put cancelled (cached=%s) <%s> %r", cached, path, process)
+            logger.debug("Cache put cancelled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
         except Exception:
-            logging.exception("Cache put error (cached=%s) <%s> %r", cached, path, process)
+            logger.exception("Cache put error (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
 
-    def on_load_done(self, path: Path, process: Tuple[ImageTransformT, ...], future: Future) -> None:
+    def on_load_done(self, path: Path, frame: int, process: Tuple[ImageTransformT, ...], future: Future) -> None:
         try:
             with self.futures_lock:
                 self.futures.remove(future)
@@ -151,7 +153,7 @@ class PictureCache(QtCore.QObject):
         except KeyError:
             cached = True
 
-        key = (path, process)
+        key = (path, frame, process)
 
         if self.ignored_loads[key] == 0:
             while True:
@@ -162,25 +164,25 @@ class PictureCache(QtCore.QObject):
                     self.ignored_loads.update([key_])
         elif self.ignored_loads[key] == 1:
             del self.ignored_loads[key]
-            self.pic_load_skipped.emit(path)
+            self.pic_load_skipped.emit(path, frame)
             return
         elif self.ignored_loads[key] > 1:
             self.ignored_loads.subtract([key])
-            self.pic_load_skipped.emit(path)
+            self.pic_load_skipped.emit(path, frame)
             return
         else:
             assert False  # noqa: B011
 
         try:
             image = future.result()
-            logging.debug("Cache load fulfilled (cached=%s) <%s> %r", cached, path, process)
-            self.pic_loaded.emit(path, image)
+            logger.debug("Cache load fulfilled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            self.pic_loaded.emit(path, frame, image)
         except CancelledError as e:
-            logging.debug("Cache load cancelled (cached=%s) <%s> %r", cached, path, process)
-            self.pic_load_failed.emit(path, e)
+            logger.debug("Cache load cancelled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            self.pic_load_failed.emit(path, frame, e)
         except Exception as e:
-            logging.exception("Cache load error (cached=%s) <%s> %r", cached, path, process)
-            self.pic_load_failed.emit(path, e)
+            logger.exception("Cache load error (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            self.pic_load_failed.emit(path, frame, e)
 
     def close(self) -> None:
         # make a thread-safe copy of the set, since `cancel` can modify the set during iteration.
@@ -192,7 +194,7 @@ class PictureCache(QtCore.QObject):
             future.cancel()
         self.executor.shutdown(wait=True)  # python39: cancel_futures=True
         assert not self.futures
-        logging.info("clearing cache")
+        logger.info("clearing cache")
         self.cache_clear()
 
 
@@ -256,7 +258,7 @@ class WindowManager(Generic[T]):
     def _create(self, *, maximized: bool, resolve_city_names: bool, mode: str, config: dict) -> T:
         kwargs = locals()
         kwargs.pop("self")
-        logging.debug("Created new window: %s", kwargs)
+        logger.debug("Created new window: %s", kwargs)
         window = self.window_cls(self, resolve_city_names, config)
         self.windows.add(window)
         window.set_fit_to_window(mode == "fit")
@@ -270,7 +272,7 @@ class WindowManager(Generic[T]):
         return window
 
     def destroy(self, window: T) -> None:
-        logging.debug("Destroying one window. Currently %d window(s).", len(self.windows))
+        logger.debug("Destroying one window. Currently %d window(s).", len(self.windows))
         window.close()
         self.windows.remove(window)
         if not self.windows and self.tray is not None:
@@ -317,6 +319,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_scale = QtWidgets.QLabel(self)
         self.statusbar_transforms = QtWidgets.QLabel(self)
         self.statusbar = QtWidgets.QStatusBar(self)
+        self.statusbar.setMinimumWidth(1)
 
         self.statusbar.addWidget(self.statusbar_number)
         self.statusbar.addWidget(self.statusbar_filename)
@@ -332,6 +335,11 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_file_open = QtWidgets.QAction("&Open", self)
         button_file_open.setStatusTip("Open file(s)")
         button_file_open.triggered.connect(self.on_file_open)
+
+        button_file_rename = QtWidgets.QAction("&Rename", self)
+        button_file_rename.setStatusTip("Rename current file")
+        button_file_rename.triggered.connect(self.on_file_rename)
+        button_file_rename.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key_F2))
 
         button_file_close = QtWidgets.QAction("&Close window", self)
         button_file_close.setStatusTip("Close window")
@@ -352,10 +360,12 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         button_view_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
         button_view_rotate_cw.setStatusTip("Rotate picture clockwise (view only)")
+        button_view_rotate_cw.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Period))
         button_view_rotate_cw.triggered.connect(self.on_view_rotate_cw)
 
         button_view_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
         button_view_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
+        button_view_rotate_ccw.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Comma))
         button_view_rotate_ccw.triggered.connect(self.on_view_rotate_ccw)
 
         button_view_fullscreen = QtWidgets.QAction("&Fullscreen", self)
@@ -409,6 +419,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         file_menu = self.menu.addMenu("&File")
         file_menu.menuAction().setStatusTip("Basic app operations")
         file_menu.addAction(button_file_open)
+        file_menu.addAction(button_file_rename)
         file_menu.addAction(button_file_close)
         file_menu.addAction(button_file_quit)
 
@@ -441,12 +452,33 @@ class PictureWindow(QtWidgets.QMainWindow):
         actions_menu.menuAction().setStatusTip("Global actions")
         actions_menu.addAction(action_undo)
 
+        action_explorer = QtWidgets.QAction("&Explorer", self)
+        action_explorer.triggered[bool].connect(self.on_explorer)
+        action_explorer.setStatusTip("Open Windows Explorer")
+
         self.action_google_maps = QtWidgets.QAction("&Google Maps", self)
         self.action_google_maps.triggered[bool].connect(self.on_google_maps)
+        self.action_google_maps.setStatusTip("Open Google Maps at GPS location")
 
-        web_menu = self.menu.addMenu("&Web")
-        web_menu.menuAction().setStatusTip("Web links")
-        web_menu.addAction(self.action_google_maps)
+        open_menu = self.menu.addMenu("&Open")
+        open_menu.menuAction().setStatusTip("Open with other app or web tools")
+        open_menu.addAction(action_explorer)
+        open_menu.addAction(self.action_google_maps)
+
+        self.multi_next = QtWidgets.QAction("&Next", self)
+        self.multi_next.triggered[bool].connect(self.on_multi_next)
+        self.multi_next.setStatusTip("Next frame")
+        self.multi_next.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Right))
+
+        self.multi_prev = QtWidgets.QAction("&Previous", self)
+        self.multi_prev.triggered[bool].connect(self.on_multi_prev)
+        self.multi_prev.setStatusTip("Previous frame")
+        self.multi_prev.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Left))
+
+        self.multi_menu = self.menu.addMenu("&Multi-frame")
+        self.multi_menu.menuAction().setStatusTip("Navigate files with multiple frames")
+        self.multi_menu.addAction(self.multi_next)
+        self.multi_menu.addAction(self.multi_prev)
 
         self.cache = PictureCache(self.cache_size)
         self.cache.pic_loaded.connect(self.on_pic_loaded)
@@ -470,13 +502,13 @@ class PictureWindow(QtWidgets.QMainWindow):
             try:
                 key = getattr(QtCore.Qt.Key, k)
             except AttributeError:
-                logging.error("Invalid Qt.Key %s", k)
+                logger.error("Invalid Qt.Key %s", k)
                 continue
 
             try:
                 func = user_funcs_map[funcname]
             except KeyError:
-                logging.error("Invalid function name %s", funcname)
+                logger.error("Invalid function name %s", funcname)
                 continue
 
             self.user_events[key] = (func, args)
@@ -516,6 +548,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_model.setText(None)
         self.statusbar_info.setText(None)
         self.action_google_maps.setEnabled(False)
+        self.multi_menu.setEnabled(False)
 
         self.viewer.clear()
 
@@ -526,7 +559,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         with MeasureTime() as stopwatch:
             out = os_sorted(paths)
             time_delta_2 = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-        logging.debug(
+        logger.debug(
             "Found %d pictures in <%s>. Reading took %s, sorting %s", len(paths), path, time_delta_1, time_delta_2
         )
         return out
@@ -536,14 +569,21 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.cache.put(self.paths[idx])
 
     def load_pictures(self, paths: Sequence[Path]) -> None:
-        logging.debug("Loading pictures from: %s", ", ".join(f"<{os.fspath(p)}>" for p in paths))
+        logger.debug("Loading pictures from: %s", ", ".join(f"<{os.fspath(p)}>" for p in paths))
         if len(paths) == 0:
             return
         elif len(paths) == 1:
             p = paths[0]
             if p.is_file():
                 self.paths = self._get_pic_paths(p.parent)
-                self.path_idx = self.paths.index(p)
+                try:
+                    self.path_idx = self.paths.index(p)
+                except ValueError:
+                    # force load unsupported file extension
+                    # in this case don't load other files and see what happens
+                    self.paths = [p]
+                    self.path_idx = 0
+
             elif p.is_dir():
                 self.paths = self._get_pic_paths(p)
                 self.path_idx = 0
@@ -558,7 +598,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                 elif p.is_dir():
                     self.paths.extend(self._get_pic_paths(p))
                 else:
-                    logging.warning("Path <%s> is neither file nor directory", p)
+                    logger.warning("Path <%s> is neither file nor directory", p)
 
         if self.paths:
             path = self.paths[self.path_idx]
@@ -658,7 +698,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                         f"<{path}> could not be {verb[1]} because it only existed in cache.",
                     )
                 except Exception as e:
-                    logging.exception(f"Failed to {verb[0]} file <%s>", path)
+                    logger.exception(f"Failed to {verb[0]} file <%s>", path)
                     QtWidgets.QMessageBox.warning(
                         self, f"Cannot {verb[0]} file", f"<{path}> could not be {verb[1]}: {e}"
                     )
@@ -706,7 +746,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                 with MeasureTime() as stopwatch:
                     meta["city"] = self.get_location(lat, lon)
                     time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
-                logging.debug("Resolving GPS coordinates took %s", time_delta)
+                logger.debug("Resolving GPS coordinates took %s", time_delta)
 
         vals = {
             "FL (mm)": "focal-length",
@@ -729,14 +769,14 @@ class PictureWindow(QtWidgets.QMainWindow):
         try:
             func(path, idx, *args)
         except Exception:
-            logging.exception("Failed to run user event %s", func, args)
+            logger.exception("Failed to run user event %s", func, args)
 
     # signal handlers
 
     @QtCore.Slot(Path, QImageWithBuffer)
-    def on_pic_loaded(self, path: Path, image: QImageWithBuffer) -> None:
+    def on_pic_loaded(self, path: Path, frame: int, image: QImageWithBuffer) -> None:
         idx = self.paths.index(path)
-        self.loaded = {"path": path, "idx": idx, "meta": image.meta}
+        self.loaded = {"path": path, "frame": frame, "idx": idx, "meta": image.meta}
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
         self.statusbar_filename.setText(path.name)
@@ -749,15 +789,20 @@ class PictureWindow(QtWidgets.QMainWindow):
         try:
             self._gps()
         except ValueError:
-            pass
+            self.action_google_maps.setEnabled(False)
         else:
             self.action_google_maps.setEnabled(True)
+
+        if self.loaded["meta"]["n_frames"] > 1:
+            self.multi_menu.setEnabled(True)
+        else:
+            self.multi_menu.setEnabled(False)
 
         self.viewer.setPixmap(image.get_pixmap())
         self.busy_sub()
 
     @QtCore.Slot(Path, Exception)
-    def on_pic_load_failed(self, path: Path, e: Exception) -> None:
+    def on_pic_load_failed(self, path: Path, frame: int, e: Exception) -> None:
         idx = self.paths.index(path)
         if isinstance(e, FileNotFoundError):
             del_path = self.paths.pop(idx)
@@ -775,12 +820,12 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.statusbar_info.setText(None)
             self.viewer.clear()
             QtWidgets.QMessageBox.warning(
-                self, "Loading picture failed", f"Loading <{path}> failed. {type(e).__name__}: {e}"
+                self, "Loading picture failed", f"Loading <{path}> [frame={frame}] failed. {type(e).__name__}: {e}"
             )
         self.busy_sub()
 
     @QtCore.Slot(Path)
-    def on_pic_load_skipped(self, path: Path) -> None:
+    def on_pic_load_skipped(self, path: Path, frame: int) -> None:
         self.busy_sub()
 
     @QtCore.Slot()
@@ -798,6 +843,28 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.load_pictures(paths)
 
         self.activateWindow()
+
+    @QtCore.Slot()
+    def on_file_rename(self) -> None:
+        assert self.loaded
+        name = self.loaded["path"].name
+        while True:
+            name, ok = QtWidgets.QInputDialog().getText(
+                self, "Rename file", "Filename", QtWidgets.QLineEdit.Normal, name
+            )
+            if ok:
+                target = self.loaded["path"].parent / name
+                if target.exists():
+                    QtWidgets.QMessageBox.warning(self, "Renaming file failed", f"{target} already exists")
+                else:
+                    self.loaded["path"].rename(target)
+                    idx = self.paths.index(self.loaded["path"])
+                    self.paths[idx] = target
+                    self.setWindowTitle(f"{target.name} - {self.wm.app_name}")
+                    self.statusbar_filename.setText(target.name)
+                    break
+            else:
+                break
 
     @QtCore.Slot()
     def on_view_rotate_cw(self) -> None:
@@ -886,6 +953,30 @@ class PictureWindow(QtWidgets.QMainWindow):
             pass
         else:
             assert False
+
+    @QtCore.Slot()
+    def on_multi_next(self) -> None:
+        assert self.loaded
+        frame = self.loaded["frame"]
+        n_frames = self.loaded["meta"]["n_frames"]
+        if frame < n_frames - 1:
+            self.busy_add()
+            self.cache.load(self.paths[self.path_idx], frame + 1)
+
+    @QtCore.Slot()
+    def on_multi_prev(self) -> None:
+        assert self.loaded
+        frame = self.loaded["frame"]
+        if frame > 0:
+            self.busy_add()
+            self.cache.load(self.paths[self.path_idx], frame - 1)
+
+    @QtCore.Slot()
+    def on_explorer(self) -> None:
+        assert self.loaded
+
+        path = os.fspath(self.loaded["path"])
+        show_in_file_manager(path)
 
     @QtCore.Slot()
     def on_google_maps(self) -> None:
@@ -977,7 +1068,7 @@ class PictureWindow(QtWidgets.QMainWindow):
             event.ignore()
 
     def close(self) -> None:
-        logging.debug("Closing window and emptying cache")
+        logger.debug("Closing window and emptying cache")
         self.cache.close()
         super().close()
 
@@ -996,17 +1087,17 @@ class PyServer(QtCore.QThread):
 
     def run(self) -> None:
         with Listener(self.name, "AF_PIPE") as listener:
-            logging.info("Pipe server `%s` started", self.name)
+            logger.info("Pipe server `%s` started", self.name)
             while True:
                 with listener.accept() as conn:
                     try:
                         msg = conn.recv()
-                        logging.debug("Received message: %s", msg)
+                        logger.debug("Received message: %s", msg)
                     except EOFError:
-                        logging.error("Receiving message failed: EOFError")
+                        logger.error("Receiving message failed: EOFError")
                         continue
                     except Exception:
-                        logging.exception("Receiving message failed")
+                        logger.exception("Receiving message failed")
                         continue
 
                     if msg is None:
