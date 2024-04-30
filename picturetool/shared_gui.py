@@ -1,4 +1,5 @@
 import logging
+import os
 from copy import deepcopy
 from fractions import Fraction
 from io import BytesIO
@@ -7,12 +8,16 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import piexif
+import rawpy
 import turbojpeg
 from genutility.pillow import NoActionNeeded, fix_orientation
+from piexif._load import _ExifReader
 from PIL import Image
 from pillow_heif import register_heif_opener
 from PySide2 import QtCore, QtGui, QtWidgets
 from typing_extensions import Self
+
+from .utils import extensions_raw
 
 register_heif_opener()
 
@@ -92,10 +97,43 @@ def piexif_get(d: Dict[str, Dict[int, Any]], idx1: str, idx2: int, dtype: str) -
 
 ImageTransformT = Callable[[Image.Image], Image.Image]
 
+mode_bits_per_channel = {
+    "1": 1,
+    "L": 8,
+    "P": 8,
+    "RGB": 8,
+    "RGBA": 8,
+    "CMYK": 8,
+    "YCbCr": 8,
+    "LAB": 8,
+    "HSV": 8,
+    "LA": 8,
+    "PA": 8,
+    "RGBX": 8,
+    "RGBa": 8,
+    "I;16": 16,
+    "BGR;24": 8,
+}
 
-def read_qt_image(
-    path: str, rotate: bool = True, process: Optional[Iterable[ImageTransformT]] = None
-) -> QImageWithBuffer:
+
+def adjust_gamma(img: Image.Image, inv_gamma_in: float, inv_gamma_out: float = 1 / 2.2) -> None:
+    import cv2
+
+    if img.mode in ("L", "RGB", "BGR;24" "RGBX"):
+        pass
+    elif img.mode in ("RGBA", "RGBa"):  # alpha channel should be unaffected by gamma according to PNG specs
+        raise ValueError(f"Unsupported image mode: {img.mode!r}")
+    else:
+        raise ValueError(f"Unsupported image mode: {img.mode!r}")
+
+    max_int = 2 ** mode_bits_per_channel[img.mode]
+
+    clut = (((np.arange(0, max_int) / (max_int - 1)) ** (inv_gamma_out / inv_gamma_in)) * (max_int - 1)).astype("uint8")
+    image_data = Image.fromarray(cv2.LUT(np.array(img), clut), img.mode)
+    img.paste(image_data)
+
+
+def read_qt_image(path: Path, frame: int = 0, process: Optional[Iterable[ImageTransformT]] = None) -> QImageWithBuffer:
     """Uses `pillow` to read a QPixmap from `path`.
     This supports more image formats than Qt directly.
     """
@@ -108,6 +146,7 @@ def read_qt_image(
     """
 
     modemap = {
+        "1": QtGui.QImage.Format_Mono,  # fixme: or Format_MonoLSB?
         "L": QtGui.QImage.Format_Grayscale8,
         "I;16": QtGui.QImage.Format_Grayscale16,
         "RGB": QtGui.QImage.Format_RGB888,
@@ -117,30 +156,82 @@ def read_qt_image(
         "RGBa": QtGui.QImage.Format_RGBA8888_Premultiplied,
     }
 
-    channelmap = {
-        "L": 1,
-        "I;16": 2,
-        "RGB": 3,
-        "BGR;24": 3,
-        "RGBA": 4,
-        "RGBX": 4,
+    modebits = {
+        "1": 1,
+        "L": 8,
+        "I;16": 16,
+        "RGB": 24,
+        "BGR;24": 24,
+        "RGBA": 32,
+        "RGBX": 32,
+        "RGBa": 32,
     }
 
-    with Image.open(path) as img:
-        meta: Dict[str, Any] = {
-            "transforms": [],
-            "format": img.format,
-        }
+    _path = os.fspath(path)
+
+    meta: Dict[str, Any] = {
+        "transforms": [],
+    }
+
+    if path.suffix.lower() in extensions_raw:
+        with rawpy.imread(_path) as raw:
+            rgb = raw.postprocess()  # ndarray[h,w,c]
+            meta["transforms"].append("raw-to-rgb")
+
+            """with pyexiv2.Image(path) as metafile:
+                exif = metafile.read_exif()
+                xmp = metafile.read_xmp()
+                icc = metafile.read_icc()"""
+
+            img = Image.fromarray(rgb)
+        try:
+            r = _ExifReader(_path)
+        except piexif.InvalidImageDataError as e:
+            logger.debug("Failed to read %r using piexif: %s", _path, e)
+        else:
+            img.info["exif"] = r.tiftag
+
+    else:
+        img = Image.open(_path)
+
+    with img:
+        meta["format"] = img.format
+        try:
+            meta["n_frames"] = getattr(img, "n_frames", 1)
+        except TypeError:
+            logger.exception("Failed to load `n_frames` from %r", _path)
+            meta["n_frames"] = 1
+
+        if meta["n_frames"] > 1 and frame > 0:
+            img.seek(frame)
+
+        gamma = img.info.get("gamma", None)
+        srgb = img.info.get("srgb", None)
+
+        if srgb is None and gamma is not None:
+            try:
+                adjust_gamma(img, gamma)
+            except ValueError as e:
+                logger.warning("Adjusting gamma failed for %r [frame=%d]: %s", _path, frame, e)
+            else:
+                meta["transforms"].append("gamma")
+
+        elif srgb is not None:
+            meta["srgb-rendering-intent"] = srgb
+
+        img.load()  # necessary for PNG exif data to be loaded if available
 
         if "exif" in img.info:
             exif = piexif.load(img.info["exif"])
+
+            logger.warning("exif.gamma: %s", exif["Exif"].get(piexif.ExifIFD.Gamma, None))
 
             try:
                 img = fix_orientation(img, exif)
             except (NoActionNeeded, KeyError):
                 pass
             except ValueError as e:
-                logger.warning("Could not fix orientation of <%s>. %s", path, e)
+                logger.warning("Could not fix orientation of <%s> [frame=%d]: %s", _path, frame, e)
             else:
                 meta["transforms"].append("rotate")
 
@@ -165,10 +256,12 @@ def read_qt_image(
                     img = func(img)
                     meta["transforms"].append(func.__name__)
                 except OSError:
-                    logger.debug("Applying %s to <%s> [mode=%s] failed", func.__name__, path, img.mode)
+                    logger.debug(
+                        "Applying %s to <%s> [frame=%d, mode=%s] failed", func.__name__, _path, frame, img.mode
+                    )
                     raise
 
-        if img.mode not in modemap or (img.width * channelmap[img.mode]) % 4 != 0:
+        if img.mode not in modemap or (img.width * modebits[img.mode]) % 32 != 0:
             # Unsupported image mode or image scanlines not 32-bit aligned
             img = img.convert("RGBA")
             meta["transforms"].append("convert-color-to-rgba")
@@ -182,7 +275,7 @@ def read_qt_image(
     return QImageWithBuffer(qimg, b, meta)
 
 
-def read_qt_pixmap(path: str) -> QtGui.QPixmap:
+def read_qt_pixmap(path: Path) -> QtGui.QPixmap:
     return read_qt_image(path).get_pixmap()
 
 
@@ -412,7 +505,7 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
 
     @QtCore.Slot(QtWidgets.QSystemTrayIcon.ActivationReason)
     def on_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
-        logging.debug("%s", self.menu)
+        logger.debug("%s", self.menu)
         if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
             self.menu.show()
         elif reason == QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick:

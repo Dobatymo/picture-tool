@@ -25,22 +25,32 @@
 
 ## implemented features
 
-- supported file formats jpeg, png, heic, dng (and more)
-- two-way buffer (going forward and backward to next/previous image)
+- supported file formats JPEG, PNG, BMP, GIF, TIFF, heic, webp (and more)
+- supported raw formats DNG, ARW, NEF, CR2, CR3 (no exif)
+- support for multi image files like GIF, TIFF
+- two-way image buffer and preload (going forward and backward to next/previous image)
 - rotate for viewing based on exif data
 - user defined hotkeys for (some) custom functions
 - view filters: grayscale, histogram normalization
+- gamma correction (only for displaying png so far)
 
 ## missing features
 
+- more raw formats (like ORF, PEF, RAF, SRW, X3F)
 - create "view" of folders: ie. load files using path patterns like "pics/2023 */*.jpg"
 - fullscreen mode
-- slideshow
 - more exif info shown (maybe in extra dialog)
 - different image sorts (filename, modification date, ...)
 - configurable resizer
 - improved zoom controls / size modes: fixed scaling
 - rotate by changing exif meta only, uses lossless jpeg rotation, don't allow lossy rotations
+
+## missing features (low priority)
+- slideshow
+
+## probably wont implement
+- transition effects for slideshows
+- printing, scanning, device imports
 
 ## possible optimizations
 
