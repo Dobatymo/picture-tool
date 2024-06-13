@@ -44,6 +44,7 @@
 - configurable resizer
 - improved zoom controls / size modes: fixed scaling
 - rotate by changing exif meta only, uses lossless jpeg rotation, don't allow lossy rotations
+- show more controls, infos related to to multi-frame images (show 'i / n' pics info, enable preload, jump to first/last, ...)
 
 ## missing features (low priority)
 - slideshow

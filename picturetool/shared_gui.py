@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import piexif
+import pillow_avif  # noqa: F401
 import rawpy
 import turbojpeg
 from genutility.pillow import NoActionNeeded, fix_orientation

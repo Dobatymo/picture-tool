@@ -11,6 +11,7 @@ from genutility.args import is_dir
 from genutility.exceptions import ParseError
 from genutility.filesystem import fileextensions, scandir_ext
 from genutility.rich import Progress
+from rich.logging import RichHandler
 from rich.progress import Progress as RichProgress
 
 logger = logging.getLogger()
@@ -26,23 +27,13 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    try:
-        import colorlog
-    except ImportError:
-        formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
-    else:
-        formatter = colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    handler = RichHandler(log_time_format="%Y-%m-%d %H-%M-%S%Z")
+    FORMAT = "%(message)s"
 
     if args.verbose:
-        handler.setLevel(logging.DEBUG)
-        logger.setLevel(logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG, format=FORMAT, handlers=[handler])
     else:
-        handler.setLevel(logging.INFO)
-        logger.setLevel(logging.INFO)
+        logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[handler])
 
     mif = MediaInfoFields()
 
