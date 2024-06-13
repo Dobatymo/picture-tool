@@ -66,7 +66,7 @@ extensions_raw = {".dng", ".arw", ".nef", ".cr2", ".cr3"}
 extensions_jpeg = {".jpg", ".jpeg"}
 extensions_heif = {".heic", ".heif"}
 extensions_images = (
-    {".bmp", ".gif", ".png", ".tif", ".tiff", ".webp"} | extensions_raw | extensions_jpeg | extensions_heif
+    {".bmp", ".gif", ".png", ".tif", ".tiff", ".webp", ".avif"} | extensions_raw | extensions_jpeg | extensions_heif
 )
 extensions_tiff = {".tif", ".tiff", ".dng", ".arw", ".nef", ".cr2"}
 extensions_exif = extensions_jpeg | extensions_heif | extensions_tiff

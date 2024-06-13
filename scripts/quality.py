@@ -12,6 +12,7 @@ import numpy as np
 import piq
 import pyiqa
 import skvideo.measure
+from concurrex.thread import ThreadedIterator
 from genutility.args import is_dir
 from genutility.filesystem import scandir_ext
 from genutility.rich import Progress
@@ -25,6 +26,11 @@ from typing_extensions import Self
 from picturetool.utils import extensions_images
 
 LOG_STR = "Failed to run %r on %r"
+
+
+class AutoThreadedIterator(ThreadedIterator):
+    def __len__(self):
+        return self.processed()
 
 
 class LogException:
@@ -142,39 +148,38 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[handler])
 
-    it = scandir_ext(args.path, args.extensions, rec=args.recursive)
+    with AutoThreadedIterator(scandir_ext(args.path, args.extensions, rec=args.recursive), maxsize=0) as it:
+        with open(args.out, "w", encoding="utf-8", newline="") as csvfile, RichProgress() as progress:
+            p = Progress(progress)
+            fieldnames = [
+                "path",
+                "filesize",
+                "mod_time",
+                "blur-cv",
+                "brisque-cv",
+                "tv-np",
+                "blur-kornia",
+                "brisque-piq",
+                "tv-piq",
+                "niqe-pyiqa",
+                "brisque-pyiqa",
+                "nima-pyiqa",
+                "brisque-imquality",
+                "niqe-skvideo",
+            ]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
 
-    with open(args.out, "w", encoding="utf-8", newline="") as csvfile, RichProgress() as progress:
-        p = Progress(progress)
-        fieldnames = [
-            "path",
-            "filesize",
-            "mod_time",
-            "blur-cv",
-            "brisque-cv",
-            "tv-np",
-            "blur-kornia",
-            "brisque-piq",
-            "tv-piq",
-            "niqe-pyiqa",
-            "brisque-pyiqa",
-            "nima-pyiqa",
-            "brisque-imquality",
-            "niqe-skvideo",
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for entity in islice(p.track(it), args.limit):
-            path = os.fspath(entity)
-            filesize = entity.stat().st_size
-            mod_time = entity.stat().st_mtime_ns
-            with LogException("Failed to process '%s'", path):
-                row = {"path": path, "filesize": filesize, "mod_time": mod_time}
-                for func in [cv2_iqa_score, torch_iqa_score, other_iqa_scires]:
-                    d = func(path)
-                    row.update(d)
-                writer.writerow(row)
+            for entity in islice(p.track_auto(it), args.limit):
+                path = os.fspath(entity)
+                filesize = entity.stat().st_size
+                mod_time = entity.stat().st_mtime_ns
+                with LogException("Failed to process '%s'", path):
+                    row = {"path": path, "filesize": filesize, "mod_time": mod_time}
+                    for func in [cv2_iqa_score, torch_iqa_score, other_iqa_scires]:
+                        d = func(path)
+                        row.update(d)
+                    writer.writerow(row)
 
 
 if __name__ == "__main__":
