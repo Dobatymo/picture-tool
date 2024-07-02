@@ -57,7 +57,9 @@ class PictureWindow:
         cv2.waitKey(1)
 
     def showfile(self, path: str) -> None:
-        im = cv2.imread(path)
+        # im = cv2.imread(path, cv2.IMREAD_COLOR)  # doesn't support unicode paths...
+        im = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+
         self.show(im)
 
 
