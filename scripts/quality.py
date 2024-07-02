@@ -75,7 +75,7 @@ def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
 def cv2_iqa_score(path: str) -> Dict[str, float]:
     ret = {}
 
-    img = cv2.imread(path)
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
     grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     with LogException(LOG_STR, "cv2.Laplacian", path):
