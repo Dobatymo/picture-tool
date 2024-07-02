@@ -75,8 +75,8 @@ def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
 def cv2_iqa_score(path: str) -> Dict[str, float]:
     ret = {}
 
-    img = cv2.imread(path)
-    grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # grey = cv2.imread(path, cv2.IMREAD_GRAYSCALE)  # doesn't support unicode paths...
+    grey = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
 
     with LogException(LOG_STR, "cv2.Laplacian", path):
         ret["blur-cv"] = cv2.Laplacian(grey, cv2.CV_64F).var(ddof=0)

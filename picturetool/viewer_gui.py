@@ -337,49 +337,50 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_file_open.setStatusTip("Open file(s)")
         button_file_open.triggered.connect(self.on_file_open)
 
-        button_file_rename = QtWidgets.QAction("&Rename", self)
+        button_file_rename = QtWidgets.QAction("Rename", self)
         button_file_rename.setStatusTip("Rename current file")
-        button_file_rename.triggered.connect(self.on_file_rename)
         button_file_rename.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key_F2))
+        button_file_rename.triggered.connect(self.on_file_rename)
 
-        button_file_close = QtWidgets.QAction("&Close window", self)
+        button_file_close = QtWidgets.QAction("Close window", self)
         button_file_close.setStatusTip("Close window")
         button_file_close.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape))
         button_file_close.triggered.connect(self.close)
 
-        button_file_quit = QtWidgets.QAction("Close &app", self)
+        button_file_quit = QtWidgets.QAction("Close app", self)
         button_file_quit.setStatusTip("Close app")
         button_file_quit.setMenuRole(QtWidgets.QAction.QuitRole)
         button_file_quit.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Q))
         button_file_quit.triggered.connect(QtCore.QCoreApplication.instance().quit)
 
-        self.button_fit_to_window = QtWidgets.QAction("&Fit to window", self)
+        self.button_fit_to_window = QtWidgets.QAction("Fit to window", self)
         self.button_fit_to_window.setCheckable(True)
         self.button_fit_to_window.setChecked(True)
         self.button_fit_to_window.setStatusTip("Resize picture to fit to window")
+        self.button_fit_to_window.setShortcut(QtGui.QKeySequence(QtCore.Qt.SHIFT | QtCore.Qt.Key_F))
         self.button_fit_to_window.triggered[bool].connect(self.on_fit_to_window)
 
-        button_view_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
+        button_view_rotate_cw = QtWidgets.QAction("Rotate clockwise", self)
         button_view_rotate_cw.setStatusTip("Rotate picture clockwise (view only)")
         button_view_rotate_cw.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Period))
         button_view_rotate_cw.triggered.connect(self.on_view_rotate_cw)
 
-        button_view_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
+        button_view_rotate_ccw = QtWidgets.QAction("Rotate counter-clockwise", self)
         button_view_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
         button_view_rotate_ccw.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Comma))
         button_view_rotate_ccw.triggered.connect(self.on_view_rotate_ccw)
 
-        button_view_fullscreen = QtWidgets.QAction("&Fullscreen", self)
+        button_view_fullscreen = QtWidgets.QAction("Fullscreen", self)
         button_view_fullscreen.setCheckable(True)
         button_view_fullscreen.setChecked(False)
         button_view_fullscreen.setStatusTip("Show picture in fullscreen mode")
-        button_view_fullscreen.triggered[bool].connect(self.on_view_fullscreen)
         button_view_fullscreen.setShortcut(QtGui.QKeySequence.FullScreen)
+        button_view_fullscreen.triggered[bool].connect(self.on_view_fullscreen)
 
         button_grayscale = QtWidgets.QAction("&Grayscale", self)
         button_grayscale.setCheckable(True)
         button_grayscale.setStatusTip("Convert to grayscale")
-        button_grayscale.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_G))
+        button_grayscale.setShortcut(QtGui.QKeySequence(QtCore.Qt.SHIFT | QtCore.Qt.Key_G))
         button_grayscale.triggered[bool].connect(self.on_filter_grayscale)
 
         button_autocontrast = QtWidgets.QAction("&Maximize (normalize) image contrast", self)
@@ -395,6 +396,7 @@ class PictureWindow(QtWidgets.QMainWindow):
             "This function applies a non-linear mapping to the input image, in order to create a uniform distribution of grayscale values in the output image."
         )
         button_equalize.triggered[bool].connect(self.on_filter_equalize)
+        button_equalize.setShortcut(QtGui.QKeySequence(QtCore.Qt.SHIFT | QtCore.Qt.Key_H))
 
         button_crop_bottom = QtWidgets.QAction("&Crop bottom half", self)
         button_crop_bottom.setStatusTip("Losslessly crop away the bottom half of the image (create new file)")
@@ -468,13 +470,13 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         self.multi_next = QtWidgets.QAction("&Next", self)
         self.multi_next.triggered[bool].connect(self.on_multi_next)
-        self.multi_next.setStatusTip("Next frame")
         self.multi_next.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Right))
+        self.multi_next.setStatusTip("Next frame")
 
         self.multi_prev = QtWidgets.QAction("&Previous", self)
         self.multi_prev.triggered[bool].connect(self.on_multi_prev)
-        self.multi_prev.setStatusTip("Previous frame")
         self.multi_prev.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Left))
+        self.multi_prev.setStatusTip("Previous frame")
 
         self.multi_menu = self.menu.addMenu("&Multi-frame")
         self.multi_menu.menuAction().setStatusTip("Navigate files with multiple frames")
