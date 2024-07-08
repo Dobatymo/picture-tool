@@ -310,6 +310,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.viewer)
 
         self.statusbar_number = QtWidgets.QLabel(self)
+        self.statusbar_number_multi = QtWidgets.QLabel(self)
         self.statusbar_filename = QtWidgets.QLabel(self)
         self.statusbar_filesize = QtWidgets.QLabel(self)
         self.statusbar_resolution = QtWidgets.QLabel(self)
@@ -321,7 +322,15 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar = QtWidgets.QStatusBar(self)
         self.statusbar.setMinimumWidth(1)
 
+        self.statusbar_number.setToolTip("Current image position / total number of images collection (eg. directory)")
+        self.statusbar_number_multi.setToolTip("Current frame / total frames of multi-frame image")
+        self.statusbar_filesize.setToolTip("Filesize")
+        self.statusbar_resolution.setToolTip("Resolution")
+        self.statusbar_make.setToolTip("Camera make")
+        self.statusbar_model.setToolTip("Camera model")
+
         self.statusbar.addWidget(self.statusbar_number)
+        self.statusbar.addWidget(self.statusbar_number_multi)
         self.statusbar.addWidget(self.statusbar_filename)
         self.statusbar.addWidget(self.statusbar_filesize)
         self.statusbar.addWidget(self.statusbar_resolution)
@@ -543,7 +552,9 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.loaded = None
         self.setWindowTitle(self.wm.app_name)
         self.statusbar_number.setText(None)
+        self.statusbar_number_multi.setText(None)
         self.statusbar_filename.setText(None)
+        self.statusbar_filename.setToolTip(None)
         self.statusbar_filesize.setText(None)
         self.statusbar_resolution.setText(None)
         self.statusbar_make.setText(None)
@@ -781,7 +792,9 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.loaded = {"path": path, "frame": frame, "idx": idx, "meta": image.meta}
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
+        self.statusbar_number_multi.setText(f"{frame + 1}/{self.loaded['meta']['n_frames']}")
         self.statusbar_filename.setText(path.name)
+        self.statusbar_filename.setToolTip(os.fspath(path))
         self.statusbar_filesize.setText(str(path.stat().st_size))
         self.statusbar_resolution.setText(f"{image.width}x{image.height}")
         self.statusbar_make.setText(image.meta.get("make"))
@@ -814,7 +827,9 @@ class PictureWindow(QtWidgets.QMainWindow):
             pass
         else:
             self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
+            self.statusbar_number_multi.setText(None)
             self.statusbar_filename.setText(None)
+            self.statusbar_filename.setToolTip(None)
             self.statusbar_filesize.setText(None)
             self.statusbar_resolution.setText(None)
             self.statusbar_make.setText(None)
@@ -864,6 +879,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                     self.paths[idx] = target
                     self.setWindowTitle(f"{target.name} - {self.wm.app_name}")
                     self.statusbar_filename.setText(target.name)
+                    self.statusbar_filename.setToolTip(os.fspath(target))
                     break
             else:
                 break
