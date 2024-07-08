@@ -43,6 +43,7 @@ if __name__ == "__main__":
         "--resolve-city-names", action="store_true", help="Resolve exif GPS coordinates to city names (slow)"
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Log additional information useful for debugging")
+    parser.add_argument("--debug", choices=("guppy", "pympler"), help="Include some debug functionality")
     args = parser.parse_args()
 
     log_fmt = "%(asctime)s %(levelname)s:%(name)s:%(funcName)s:%(thread)d:%(message)s"
@@ -73,17 +74,39 @@ if __name__ == "__main__":
 
     from picturetool.viewer_gui import PictureWindow, PyServer, WindowManager
 
+    if args.debug == "guppy":
+        from guppy import hpy
+
+        hp = hpy()
+        hp.setrelheap()
+    elif args.debug == "pympler":
+        from pympler import tracker
+
+        tr = tracker.SummaryTracker()
+
     def excepthook(exc_type, value, traceback):
         logging.exception("Unhandled exception", exc_info=(exc_type, value, traceback))
 
     class MyWindowManager(WindowManager):
         @QtCore.Slot()
         def about(self) -> None:
-            QtWidgets.QMessageBox.about(
-                None,
-                "About",
-                f"Open windows: {len(self.windows)}",
-            )
+            from datetime import datetime
+
+            if args.debug == "guppy":
+                h = hp.heap()
+                with open("viewer-gui-guppy.txt", "a", encoding="utf-8") as fw:
+                    fw.write(f"{datetime.now()}\n")
+                    fw.write(str(h))
+                    fw.write("\n\n")
+                hp.setrelheap()
+            elif args.debug == "pympler":
+                with open("viewer-gui-pympler.txt", "a", encoding="utf-8") as fw:
+                    fw.write(f"{datetime.now()}\n")
+                    for line in tr.format_diff():
+                        fw.write(line + "\n")
+                    fw.write("\n\n")
+
+            QtWidgets.QMessageBox.about(None, "About", f"Open windows: {len(self.windows)}")
 
     sys.excepthook = excepthook
 
@@ -97,9 +120,7 @@ if __name__ == "__main__":
         config = {}
     except json.JSONDecodeError as e:
         QtWidgets.QMessageBox.warning(
-            None,
-            "Could read config file",
-            f"Config file <{configfile}> failed to parse: {e}",
+            None, "Could read config file", f"Config file <{configfile}> failed to parse: {e}"
         )
         ret = app.exec_()
         sys.exit(ret)

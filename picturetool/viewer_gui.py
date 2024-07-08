@@ -252,6 +252,7 @@ class WindowManager(Generic[T]):
         kwargs.update(args)
         paths = kwargs.pop("paths", [])
         _ = kwargs.pop("verbose")  # ignore
+        _ = kwargs.pop("debug")  # ignore
         window = self._create(**kwargs)
         window.load_pictures(paths)
 
