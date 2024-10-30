@@ -15,10 +15,16 @@ from genutility.pillow import NoActionNeeded, fix_orientation
 from piexif._load import _ExifReader
 from PIL import Image
 from pillow_heif import register_heif_opener
-from PySide2 import QtCore, QtGui, QtWidgets
 from typing_extensions import Self
 
 from .utils import extensions_raw
+
+try:
+    from PySide6 import QtCore, QtGui, QtWidgets
+    from PySide6.QtGui import QAction
+except ImportError:
+    from PySide2 import QtCore, QtGui, QtWidgets
+    from PySide2.QtWidgets import QAction
 
 register_heif_opener()
 
@@ -120,7 +126,7 @@ mode_bits_per_channel = {
 def adjust_gamma(img: Image.Image, inv_gamma_in: float, inv_gamma_out: float = 1 / 2.2) -> None:
     import cv2
 
-    if img.mode in ("L", "RGB", "BGR;24" "RGBX"):
+    if img.mode in ("L", "RGB", "BGR;24", "RGBX"):
         pass
     elif img.mode in ("RGBA", "RGBa"):  # alpha channel should be unaffected by gamma according to PNG specs
         raise ValueError(f"Unsupported image mode: {img.mode!r}")
@@ -523,12 +529,12 @@ class QSystemTrayIconWithMenu(QtWidgets.QSystemTrayIcon):
     """
 
     """
-    @QtCore.Slot(QtWidgets.QAction)
+    @QtCore.Slot(QAction)
     def on_hovered(self, action):
         logger.debug("%s", action)
     """
 
-    @QtCore.Slot(QtWidgets.QAction)
+    @QtCore.Slot(QAction)
     def on_triggered(self, action) -> None:
         logger.debug("%s", action)
 
