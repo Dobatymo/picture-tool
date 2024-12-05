@@ -66,22 +66,27 @@ class PictureCache(QtCore.QObject):
     pic_load_failed = QtCore.Signal(Path, int, Exception)
     pic_load_skipped = QtCore.Signal(Path, int)
 
+    auto_rotate: bool
     process: List[ImageTransformT]
-    outstanding_loads: Deque[Tuple[Path, int, Tuple[ImageTransformT, ...]]]
-    ignored_loads: CounterT[Tuple[Path, int, Tuple[ImageTransformT, ...]]]
+
+    outstanding_loads: Deque[Tuple[Path, int, bool, Tuple[ImageTransformT, ...]]]
+    ignored_loads: CounterT[Tuple[Path, int, bool, Tuple[ImageTransformT, ...]]]
 
     def __init__(self, size: Optional[int] = None) -> None:
         super().__init__()
         self.executor = ThreadPoolExecutor(max_workers=IMAGE_LOADER_NUM_WORKERS)
         self.get = lru_cache(maxsize=size)(self._call)
+
+        self.auto_rotate = True
         self.process = []
+
         self.outstanding_loads = deque()
         self.ignored_loads = Counter()
         self.futures: Set[Future] = set()  # set of non-cached futures
         self.futures_lock = Lock()
 
-    def _call(self, path: Path, frame: int, process: Tuple[ImageTransformT, ...]) -> Future:
-        future = self.executor.submit(read_qt_image, path, frame, process)
+    def _call(self, path: Path, frame: int, auto_rotate: bool, process: Tuple[ImageTransformT, ...]) -> Future:
+        future = self.executor.submit(read_qt_image, path, frame, auto_rotate, process)
         with self.futures_lock:
             self.futures.add(future)
         return future
@@ -96,13 +101,13 @@ class PictureCache(QtCore.QObject):
         """
 
         process = tuple(self.process)
-        logger.debug("Cache put <%s> [frame=%d] %r", path, frame, process)
+        logger.debug("Cache put <%s> [frame=%d] [auto_rotate=%s] %r", path, frame, self.auto_rotate, process)
         try:
-            future = self.get(path, frame, process)
+            future = self.get(path, frame, self.auto_rotate, process)
         except RuntimeError as e:
             logger.info("Failed to put to cache: %s", e)
         else:
-            future.add_done_callback(partial(self.on_put_done, path, frame, process))
+            future.add_done_callback(partial(self.on_put_done, path, frame, self.auto_rotate, process))
 
     def load(self, path: Path, frame: int = 0) -> None:
         """Load image using threadpool.
@@ -114,14 +119,14 @@ class PictureCache(QtCore.QObject):
         """
 
         process = tuple(self.process)
-        logger.debug("Cache load <%s> [frame=%d] %r", path, frame, process)
-        self.outstanding_loads.append((path, frame, process))
+        logger.debug("Cache load <%s> [frame=%d] [auto_rotate=%s] %r", path, frame, self.auto_rotate, process)
+        self.outstanding_loads.append((path, frame, self.auto_rotate, process))
         try:
-            future = self.get(path, frame, process)
+            future = self.get(path, frame, self.auto_rotate, process)
         except RuntimeError as e:
             logger.info("Failed to load from cache: %s", e)
         else:
-            future.add_done_callback(partial(self.on_load_done, path, frame, process))
+            future.add_done_callback(partial(self.on_load_done, path, frame, self.auto_rotate, process))
 
     def cache_info(self) -> _CacheInfo:
         return self.get.cache_info()
@@ -129,7 +134,9 @@ class PictureCache(QtCore.QObject):
     def cache_clear(self) -> None:
         self.get.cache_clear()
 
-    def on_put_done(self, path: Path, frame: int, process: Tuple[ImageTransformT, ...], future: Future) -> None:
+    def on_put_done(
+        self, path: Path, frame: int, auto_rotate: bool, process: Tuple[ImageTransformT, ...], future: Future
+    ) -> None:
         try:
             with self.futures_lock:
                 self.futures.remove(future)
@@ -139,13 +146,36 @@ class PictureCache(QtCore.QObject):
 
         try:
             future.result()
-            logger.debug("Cache put fulfilled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            logger.debug(
+                "Cache put fulfilled (cached=%s) <%s> [frame=%d] [auto_rotate=%s] %r",
+                cached,
+                path,
+                frame,
+                auto_rotate,
+                process,
+            )
         except CancelledError:
-            logger.debug("Cache put cancelled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            logger.debug(
+                "Cache put cancelled (cached=%s) <%s> [frame=%d] [auto_rotate=%s] %r",
+                cached,
+                path,
+                frame,
+                auto_rotate,
+                process,
+            )
         except Exception:
-            logger.exception("Cache put error (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            logger.exception(
+                "Cache put error (cached=%s) <%s> [frame=%d] [auto_rotate=%s] %r",
+                cached,
+                path,
+                frame,
+                auto_rotate,
+                process,
+            )
 
-    def on_load_done(self, path: Path, frame: int, process: Tuple[ImageTransformT, ...], future: Future) -> None:
+    def on_load_done(
+        self, path: Path, frame: int, auto_rotate: bool, process: Tuple[ImageTransformT, ...], future: Future
+    ) -> None:
         try:
             with self.futures_lock:
                 self.futures.remove(future)
@@ -153,7 +183,7 @@ class PictureCache(QtCore.QObject):
         except KeyError:
             cached = True
 
-        key = (path, frame, process)
+        key = (path, frame, auto_rotate, process)
 
         if self.ignored_loads[key] == 0:
             while True:
@@ -175,13 +205,34 @@ class PictureCache(QtCore.QObject):
 
         try:
             image = future.result()
-            logger.debug("Cache load fulfilled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            logger.debug(
+                "Cache load fulfilled (cached=%s) <%s> [frame=%d] [auto_rotate=%s] %r",
+                cached,
+                path,
+                frame,
+                auto_rotate,
+                process,
+            )
             self.pic_loaded.emit(path, frame, image)
         except CancelledError as e:
-            logger.debug("Cache load cancelled (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            logger.debug(
+                "Cache load cancelled (cached=%s) <%s> [frame=%d] [auto_rotate=%s] %r",
+                cached,
+                path,
+                frame,
+                auto_rotate,
+                process,
+            )
             self.pic_load_failed.emit(path, frame, e)
         except Exception as e:
-            logger.exception("Cache load error (cached=%s) <%s> [frame=%d] %r", cached, path, frame, process)
+            logger.exception(
+                "Cache load error (cached=%s) <%s> [frame=%d] [auto_rotate=%s] %r",
+                cached,
+                path,
+                frame,
+                auto_rotate,
+                process,
+            )
             self.pic_load_failed.emit(path, frame, e)
 
     def close(self) -> None:
@@ -343,12 +394,18 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         button_file_open = QtWidgets.QAction("&Open", self)
         button_file_open.setStatusTip("Open file(s)")
+        button_file_open.setShortcut(QtGui.QKeySequence.Open)
         button_file_open.triggered.connect(self.on_file_open)
 
         button_file_rename = QtWidgets.QAction("Rename", self)
         button_file_rename.setStatusTip("Rename current file")
         button_file_rename.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key_F2))
         button_file_rename.triggered.connect(self.on_file_rename)
+
+        self.button_file_saveas = QtWidgets.QAction("Save as", self)
+        self.button_file_saveas.setStatusTip("Save copy of the file under a different name")
+        self.button_file_saveas.setShortcut(QtGui.QKeySequence.SaveAs)
+        self.button_file_saveas.triggered.connect(self.on_file_saveas)
 
         button_file_close = QtWidgets.QAction("Close window", self)
         button_file_close.setStatusTip("Close window")
@@ -384,6 +441,12 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_view_fullscreen.setStatusTip("Show picture in fullscreen mode")
         button_view_fullscreen.setShortcut(QtGui.QKeySequence.FullScreen)
         button_view_fullscreen.triggered[bool].connect(self.on_view_fullscreen)
+
+        button_auto_rotate = QtWidgets.QAction("&Auto-rotate", self)
+        button_auto_rotate.setCheckable(True)
+        button_auto_rotate.setChecked(True)
+        button_auto_rotate.setStatusTip("Rotate image automatically based on metadata")
+        button_auto_rotate.triggered[bool].connect(self.on_filter_auto_rotate)
 
         button_grayscale = QtWidgets.QAction("&Grayscale", self)
         button_grayscale.setCheckable(True)
@@ -431,6 +494,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         file_menu.menuAction().setStatusTip("Basic app operations")
         file_menu.addAction(button_file_open)
         file_menu.addAction(button_file_rename)
+        file_menu.addAction(self.button_file_saveas)
         file_menu.addAction(button_file_close)
         file_menu.addAction(button_file_quit)
 
@@ -443,6 +507,7 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         filters_menu = self.menu.addMenu("&Filters")
         filters_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
+        filters_menu.addAction(button_auto_rotate)
         filters_menu.addAction(button_grayscale)
         filters_menu.addAction(button_autocontrast)
         filters_menu.addAction(button_equalize)
@@ -560,6 +625,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_make.setText(None)
         self.statusbar_model.setText(None)
         self.statusbar_info.setText(None)
+        self.button_file_saveas.setEnabled(False)
         self.action_google_maps.setEnabled(False)
         self.multi_menu.setEnabled(False)
 
@@ -601,6 +667,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                 self.paths = self._get_pic_paths(p)
                 self.path_idx = 0
             else:
+                # fixme: this can happen on refresh when the file was deleted in the meantime
                 raise ValueError(f"Path <{p}> is neither file nor directory")
         else:
             self.path_idx = 0
@@ -801,6 +868,8 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_model.setText(image.meta.get("model"))
         self.statusbar_info.setText(self.make_cam_info_string(image.meta))
 
+        self.button_file_saveas.setEnabled(True)
+
         try:
             self._gps()
         except ValueError:
@@ -885,6 +954,43 @@ class PictureWindow(QtWidgets.QMainWindow):
                 break
 
     @QtCore.Slot()
+    def on_file_saveas(self) -> None:
+        pm = self.viewer.label.pm
+        if not self.loaded or pm is None:
+            QtWidgets.QMessageBox.warning(self, "Saving failed", "No image currently loaded")
+            return
+
+        mimetype_filters = (
+            "application/octet-stream",
+            "image/jpeg",
+            "image/png",
+            "image/bmp",
+            "image/tiff",
+            "image/gif",
+            "image/webp",
+        )
+
+        dialog = QtWidgets.QFileDialog(self)
+        dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
+        dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptSave)
+        dialog.setViewMode(QtWidgets.QFileDialog.Detail)
+        dialog.setDirectory(os.fspath(self.loaded["path"].parent))
+        dialog.setMimeTypeFilters(mimetype_filters)
+
+        if dialog.exec_():
+            (save_path,) = dialog.selectedFiles()
+            mimetype = dialog.selectedMimeTypeFilter()
+            save_path = Path(save_path)
+            img = pm.to_pillow()
+            try:
+                img.save(save_path)
+                QtWidgets.QMessageBox.information(
+                    self, "Save successful", f"Successfully saved {mimetype} to {save_path}"
+                )
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "Saving failed", f"Save {mimetype} to {save_path} failed: {e}")
+
+    @QtCore.Slot()
     def on_view_rotate_cw(self) -> None:
         tr = QtGui.QTransform()
         tr.rotate(90)
@@ -916,6 +1022,11 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.cache.process.append(_grayscale)
         else:
             self.cache.process.remove(_grayscale)
+        self.reload()
+
+    @QtCore.Slot(bool)
+    def on_filter_auto_rotate(self, checked: bool) -> None:
+        self.cache.auto_rotate = checked
         self.reload()
 
     @QtCore.Slot(bool)

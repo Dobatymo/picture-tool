@@ -43,7 +43,7 @@ class QPixmapWithMeta:
         self.pixmap = pixmap
         self.meta = meta
 
-    def transformed(self, tr: QtGui.QTransform, name: str):
+    def transformed(self, tr: QtGui.QTransform, name: str) -> Self:
         pixmap = self.pixmap.transformed(tr)
         meta = deepcopy(self.meta)
         meta["transforms"].append(name)
@@ -51,6 +51,26 @@ class QPixmapWithMeta:
 
     def size(self) -> QtCore.QSize:
         return self.pixmap.size()
+
+    def to_pillow(self) -> Image.Image:
+        logger.warning("depth %s, width %s, height %s", self.pixmap.depth(), self.pixmap.width(), self.pixmap.height())
+
+        buffer = QtCore.QBuffer()
+        buffer.open(QtCore.QBuffer.ReadWrite)
+        try:
+            # preserve alpha channel with png
+            # otherwise ppm is more friendly with Image.open
+            if self.pixmap.hasAlphaChannel():
+                self.pixmap.save(buffer, "png")
+            else:
+                self.pixmap.save(buffer, "ppm")
+            b = BytesIO()
+            b.write(buffer.data())
+            b.seek(0)
+
+            return Image.open(b)
+        finally:
+            buffer.close()
 
 
 class QImageWithBuffer:
@@ -140,7 +160,9 @@ def adjust_gamma(img: Image.Image, inv_gamma_in: float, inv_gamma_out: float = 1
     img.paste(image_data)
 
 
-def read_qt_image(path: Path, frame: int = 0, process: Optional[Iterable[ImageTransformT]] = None) -> QImageWithBuffer:
+def read_qt_image(
+    path: Path, frame: int = 0, auto_rotate: bool = True, process: Optional[Iterable[ImageTransformT]] = None
+) -> QImageWithBuffer:
     """Uses `pillow` to read a QPixmap from `path`.
     This supports more image formats than Qt directly.
     """
@@ -230,17 +252,19 @@ def read_qt_image(path: Path, frame: int = 0, process: Optional[Iterable[ImageTr
 
         if "exif" in img.info:
             exif = piexif.load(img.info["exif"])
+            exif_gamma = exif["Exif"].get(piexif.ExifIFD.Gamma, None)
+            if exif_gamma is not None:
+                logger.info("exif.gamma: %s", exif_gamma)
 
-            logger.warning("exif.gamma: %s", exif["Exif"].get(piexif.ExifIFD.Gamma, None))
-
-            try:
-                img = fix_orientation(img, exif)
-            except (NoActionNeeded, KeyError):
-                pass
-            except ValueError as e:
-                logger.warning("Could not fix orientation of <%s> [frame=%d]: %s", _path, frame, e)
-            else:
-                meta["transforms"].append("rotate")
+            if auto_rotate:
+                try:
+                    img = fix_orientation(img, exif)
+                except (NoActionNeeded, KeyError):
+                    pass
+                except ValueError as e:
+                    logger.warning("Could not fix orientation of <%s> [frame=%d]: %s", _path, frame, e)
+                else:
+                    meta["transforms"].append("rotate")
 
             meta.update(
                 {
