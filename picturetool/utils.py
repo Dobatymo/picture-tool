@@ -53,6 +53,8 @@ from . import npmp
 T = TypeVar("T")
 Shape = Tuple[int, ...]
 
+logger = logging.getLogger(__name__)
+
 APP_NAME = "picture-tool"
 APP_AUTHOR = "Dobatymo"
 APP_VERSION = "0.1"
@@ -65,8 +67,19 @@ GpsT = Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]
 extensions_raw = {".dng", ".arw", ".nef", ".cr2", ".cr3"}
 extensions_jpeg = {".jpg", ".jpeg"}
 extensions_heif = {".heic", ".heif"}
+extensions_ppm = {".pbm", ".pgm", ".ppm", ".pnm"}
+extensions_xbm = {".xbm"}
+extensions_sgi = {".sgi"}
+extensions_sun_raster = {".ras", ".sun"}
 extensions_images = (
-    {".bmp", ".gif", ".png", ".tif", ".tiff", ".webp", ".avif"} | extensions_raw | extensions_jpeg | extensions_heif
+    {".bmp", ".gif", ".png", ".tif", ".tiff", ".webp", ".avif"}
+    | extensions_raw
+    | extensions_jpeg
+    | extensions_heif
+    | extensions_ppm
+    | extensions_xbm
+    | extensions_sgi
+    | extensions_sun_raster
 )
 extensions_tiff = {".tif", ".tiff", ".dng", ".arw", ".nef", ".cr2"}
 extensions_exif = extensions_jpeg | extensions_heif | extensions_tiff
@@ -466,12 +479,15 @@ def pd_sort_within_group(
         return df
 
 
-def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> datetime:
+def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[bytes] = None) -> Optional[datetime]:
     """Converts `date` with optional `subsec` and `offset` to a python datetime object.
     Raises ValueError if the input is invalid.
     """
 
-    date_str = date.rstrip(b"\0").decode("ascii")
+    date_str = date.rstrip(b"\0").decode("ascii").strip()
+
+    if not date_str:
+        return None
 
     if offset:
         offset_str = offset.rstrip(b"\0").decode("ascii")
@@ -528,11 +544,13 @@ def get_exif_dates(exif: dict) -> Dict[str, datetime]:
             date = exif[m1[date_idx[0]]][getattr(m2[date_idx[0]], date_idx[1])]
             subsec = exif[m1[subsec_idx[0]]].get(getattr(m2[subsec_idx[0]], subsec_idx[1]), None)
             offset = exif[m1[offet_idx[0]]].get(getattr(m2[offet_idx[0]], offet_idx[1]), None)
-            out[field] = make_datetime(date, subsec, offset)
+            dt = make_datetime(date, subsec, offset)
+            if dt is not None:
+                out[field] = dt
         except KeyError:  # missing info
             pass
-        except UnicodeDecodeError:  # bad fields
-            pass
+        except ValueError as e:  # bad fields, includes UnicodeDecodeError
+            logger.warning("Badly formatted exif datetime %s (%r, %r, %r): %s", field, date, subsec, offset, e)
 
     return out
 
@@ -708,25 +726,25 @@ class MultiprocessingProcess(multiprocessing.get_context().Process):
             raise
         except KeyboardInterrupt:
             thread = threading.get_ident()
-            logging.debug("KeyboardInterrupt in process %s thread %s ", self.name, thread)
+            logger.debug("KeyboardInterrupt in process %s thread %s ", self.name, thread)
             sys.exit(1)
         except BaseException as e:  # noqa: B036
             thread = threading.get_ident()
-            logging.exception("%s in process %s thread %s ", type(e).__name__, self.name, thread)
+            logger.exception("%s in process %s thread %s ", type(e).__name__, self.name, thread)
             sys.exit(1)
 
 
 def rich_sys_excepthook(type, value, traceback) -> None:
     name = multiprocessing.current_process().name
     exc_info = (type, value, traceback)
-    logging.error("%s ignored in %s", type.__name__, name, exc_info=exc_info)
+    logger.error("%s ignored in %s", type.__name__, name, exc_info=exc_info)
 
 
 def rich_threading_excepthook(args: threading.ExceptHookArgs) -> None:
     proc = multiprocessing.current_process()
     exc_info = (args.exc_type, args.exc_value, args.exc_traceback)
     threadname = None if args.thread is None else args.thread.name
-    logging.error("Thread %s in process %s interrupted", threadname, proc.name, exc_info=exc_info)
+    logger.error("Thread %s in process %s interrupted", threadname, proc.name, exc_info=exc_info)
 
 
 def rich_sys_unraisablehook(unraisable) -> None:
@@ -739,7 +757,7 @@ def rich_sys_unraisablehook(unraisable) -> None:
     exc_info = (unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback)
     if isinstance(unraisable.exc_value, KeyboardInterrupt):
         err_msg = unraisable.err_msg or "KeyboardInterrupt ignored in"
-        logging.debug("%s: %r", err_msg, unraisable.object)
+        logger.debug("%s: %r", err_msg, unraisable.object)
     else:
         err_msg = unraisable.err_msg or "Exception ignored in"
-        logging.error("%s: %r", err_msg, unraisable.object, exc_info=exc_info)
+        logger.error("%s: %r", err_msg, unraisable.object, exc_info=exc_info)

@@ -8,7 +8,8 @@ from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
-from threading import Lock
+from queue import Full, Queue
+from threading import Lock, Thread
 from typing import Any, Callable
 from typing import Counter as CounterT
 from typing import Deque, Dict, Generic, List, NamedTuple, Optional, Sequence, Set, Tuple, Type, TypeVar
@@ -31,6 +32,7 @@ from .shared_gui import (
     crop_half_save,
     read_qt_image,
     rotate_save,
+    rotate_save_meta,
 )
 from .utils import MyFraction, extensions_images, show_in_file_manager
 
@@ -260,7 +262,7 @@ class WindowManager(Generic[T]):
         self.tray: Optional[QSystemTrayIconWithMenu] = None
         self.create_kwargs: Dict[str, Any] = {}
 
-    def set_create_args(self, **kwargs) -> None:
+    def set_create_args(self, **kwargs: Any) -> None:
         self.create_kwargs = kwargs
 
     def make_tray(self, app: QtCore.QCoreApplication) -> None:
@@ -330,6 +332,28 @@ class WindowManager(Generic[T]):
             self.tray.setVisible(True)
 
 
+class BeepThread(Thread):
+    def __init__(self) -> None:
+        super().__init__(daemon=True)
+        self.q: "Queue[Tuple[int, float]]" = Queue(maxsize=2)
+
+    def run(self) -> None:
+        from winsound import Beep
+
+        while True:
+            frequency, duration = self.q.get()
+            Beep(frequency, int(duration * 1000))
+
+    def play(self, frequency: int, duration: float) -> bool:
+        """Play a beep sound. Frequency in Hz and duration in seconds."""
+
+        try:
+            self.q.put_nowait((frequency, duration))
+            return True
+        except Full:
+            return False
+
+
 class PictureWindow(QtWidgets.QMainWindow):
     rg: ReverseGeocode = None
 
@@ -368,6 +392,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_make = QtWidgets.QLabel(self)
         self.statusbar_model = QtWidgets.QLabel(self)
         self.statusbar_info = QtWidgets.QLabel(self)
+        self.statusbar_c2pa = QtWidgets.QLabel(self)
         self.statusbar_scale = QtWidgets.QLabel(self)
         self.statusbar_transforms = QtWidgets.QLabel(self)
         self.statusbar = QtWidgets.QStatusBar(self)
@@ -388,6 +413,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar.addWidget(self.statusbar_make)
         self.statusbar.addWidget(self.statusbar_model)
         self.statusbar.addWidget(self.statusbar_info)
+        self.statusbar.addWidget(self.statusbar_c2pa)
         self.statusbar.addWidget(self.statusbar_scale)
         self.statusbar.addWidget(self.statusbar_transforms)
         self.setStatusBar(self.statusbar)
@@ -489,6 +515,18 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_edit_rotate_ccw.setStatusTip("Losslessly rotate picture counter-clockwise (create new file)")
         button_edit_rotate_ccw.triggered.connect(self.on_edit_rotate_ccw)
 
+        button_edit_rotate_cw_meta = QtWidgets.QAction("&Rotate clockwise (using metadata)", self)
+        button_edit_rotate_cw_meta.setStatusTip(
+            "Losslessly rotate picture clockwise by modifying metadata (create new file)"
+        )
+        button_edit_rotate_cw_meta.triggered.connect(self.on_edit_rotate_cw_meta)
+
+        button_edit_rotate_ccw_meta = QtWidgets.QAction("&Rotate counter-clockwise (using metadata)", self)
+        button_edit_rotate_ccw_meta.setStatusTip(
+            "Losslessly rotate picture counter-clockwise by modifying metadata (create new file)"
+        )
+        button_edit_rotate_ccw_meta.triggered.connect(self.on_edit_rotate_ccw_meta)
+
         self.menu = self.menuBar()
         file_menu = self.menu.addMenu("&File")
         file_menu.menuAction().setStatusTip("Basic app operations")
@@ -519,6 +557,8 @@ class PictureWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(button_edit_rotate_cw)
         edit_menu.addAction(button_edit_rotate_180)
         edit_menu.addAction(button_edit_rotate_ccw)
+        edit_menu.addAction(button_edit_rotate_cw_meta)
+        edit_menu.addAction(button_edit_rotate_ccw_meta)
 
         action_undo = QtWidgets.QAction("&Undo", self)
         action_undo.setShortcut(QtGui.QKeySequence.Undo)
@@ -589,6 +629,14 @@ class PictureWindow(QtWidgets.QMainWindow):
 
             self.user_events[key] = (func, args)
 
+        self.events = config.get("events", {})
+
+        if "on_date_changed" in self.events:
+            self.beepthread: Optional[BeepThread] = BeepThread()
+            self.beepthread.start()
+        else:
+            self.beepthread = None
+
         self.actions: Deque = deque(maxlen=UNDO_LIST_SIZE)
 
     def _gps(self) -> GpsDms:
@@ -602,12 +650,12 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             raise ValueError("GPS not available")
 
-    def busy_add(self):
+    def busy_add(self) -> None:
         if self.num_busy == 0:
             self.setCursor(QtCore.Qt.BusyCursor)
         self.num_busy += 1
 
-    def busy_sub(self):
+    def busy_sub(self) -> None:
         self.num_busy -= 1
         if self.num_busy == 0:
             self.unsetCursor()
@@ -625,6 +673,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_make.setText(None)
         self.statusbar_model.setText(None)
         self.statusbar_info.setText(None)
+        self.statusbar_c2pa.setText(None)
         self.button_file_saveas.setEnabled(False)
         self.action_google_maps.setEnabled(False)
         self.multi_menu.setEnabled(False)
@@ -856,7 +905,24 @@ class PictureWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(Path, QImageWithBuffer)
     def on_pic_loaded(self, path: Path, frame: int, image: QImageWithBuffer) -> None:
         idx = self.paths.index(path)
+        if self.loaded:
+            prev_date = self.loaded["meta"].get("original")
+        else:
+            prev_date = None
+
         self.loaded = {"path": path, "frame": frame, "idx": idx, "meta": image.meta}
+        current_date = self.loaded["meta"].get("original")
+
+        if "on_date_changed" in self.events:
+            if prev_date and current_date:
+                date_changed = current_date.date() != prev_date.date()
+            else:
+                date_changed = False
+
+            if date_changed:
+                assert self.beepthread is not None
+                self.beepthread.play(440, 0.5)
+
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
         self.statusbar_number_multi.setText(f"{frame + 1}/{self.loaded['meta']['n_frames']}")
@@ -867,6 +933,15 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar_make.setText(image.meta.get("make"))
         self.statusbar_model.setText(image.meta.get("model"))
         self.statusbar_info.setText(self.make_cam_info_string(image.meta))
+
+        if image.meta["c2pa"] is True:
+            self.statusbar_c2pa.setText("C2PA valid")
+            self.statusbar_c2pa.setStyleSheet("QLabel { color : green; }")
+        elif image.meta["c2pa"] is False:
+            self.statusbar_c2pa.setText("C2PA invalid")
+            self.statusbar_c2pa.setStyleSheet("QLabel { color : red; }")
+        else:
+            self.statusbar_c2pa.setText(None)
 
         self.button_file_saveas.setEnabled(True)
 
@@ -904,6 +979,7 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.statusbar_make.setText(None)
             self.statusbar_model.setText(None)
             self.statusbar_info.setText(None)
+            self.statusbar_c2pa.setText(None)
             self.viewer.clear()
             QtWidgets.QMessageBox.warning(
                 self, "Loading picture failed", f"Loading <{path}> [frame={frame}] failed. {type(e).__name__}: {e}"
@@ -1052,9 +1128,34 @@ class PictureWindow(QtWidgets.QMainWindow):
         path = self.loaded["path"]
         if pm is not None:
             format = pm.meta["format"]
-            assert format == "JPEG", format
+            if format != "JPEG":
+                QtWidgets.QMessageBox.warning(
+                    self, "Cropping picture failed", f"Cropping <{path}> failed. {format} is not supported."
+                )
+                return
+
             try:
                 crop_half_save(path, "bottom")
+            except (ImperfectTransform, FileExistsError) as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Cropping picture failed", f"Cropping <{path}> failed. {type(e).__name__}: {e}"
+                )
+
+    @QtCore.Slot()
+    def on_crop_top(self) -> None:
+        assert self.loaded is not None
+        pm = self.viewer.label.pm
+        path = self.loaded["path"]
+        if pm is not None:
+            format = pm.meta["format"]
+            if format != "JPEG":
+                QtWidgets.QMessageBox.warning(
+                    self, "Cropping picture failed", f"Cropping <{path}> failed. {format} is not supported."
+                )
+                return
+
+            try:
+                crop_half_save(path, "top")
             except (ImperfectTransform, FileExistsError) as e:
                 QtWidgets.QMessageBox.warning(
                     self, "Cropping picture failed", f"Cropping <{path}> failed. {type(e).__name__}: {e}"
@@ -1110,29 +1211,14 @@ class PictureWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def on_google_maps(self) -> None:
         try:
-            lat, lon = self._gps()
+            _lat, _lon = self._gps()
         except ValueError:
             return
 
-        lat = gps_dms_to_dd(lat)
-        lon = gps_dms_to_dd(lon)
+        lat = gps_dms_to_dd(_lat)
+        lon = gps_dms_to_dd(_lon)
         url = f"https://www.google.com/maps?q={lat},{lon}"
         webbrowser.open(url)
-
-    @QtCore.Slot()
-    def on_crop_top(self) -> None:
-        assert self.loaded is not None
-        pm = self.viewer.label.pm
-        path = self.loaded["path"]
-        if pm is not None:
-            format = pm.meta["format"]
-            assert format == "JPEG", format
-            try:
-                crop_half_save(path, "top")
-            except (ImperfectTransform, FileExistsError) as e:
-                QtWidgets.QMessageBox.warning(
-                    self, "Cropping picture failed", f"Cropping <{path}> failed. {type(e).__name__}: {e}"
-                )
 
     def _on_edit_rotate(self, target: str) -> None:
         assert self.loaded is not None
@@ -1140,10 +1226,9 @@ class PictureWindow(QtWidgets.QMainWindow):
         path = self.loaded["path"]
         if pm is not None:
             format = pm.meta["format"]
-            assert format == "JPEG", format
             try:
-                rotate_save(path, target)
-            except (ImperfectTransform, FileExistsError) as e:
+                rotate_save(path, target, format)
+            except (ImperfectTransform, FileExistsError, ValueError) as e:
                 QtWidgets.QMessageBox.warning(
                     self, "Rotating picture failed", f"Rotating <{path}> failed. {type(e).__name__}: {e}"
                 )
@@ -1159,6 +1244,33 @@ class PictureWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def on_edit_rotate_ccw(self) -> None:
         self._on_edit_rotate("ccw")
+
+    def _on_edit_rotate_meta(self, target: str) -> None:
+        assert self.loaded is not None
+        pm = self.viewer.label.pm
+        path = self.loaded["path"]
+        if pm is not None:
+            format = pm.meta["format"]
+            if format != "JPEG":
+                QtWidgets.QMessageBox.warning(
+                    self, "Rotating picture failed", f"Rotating <{path}> failed. {format} is not supported."
+                )
+                return
+
+            try:
+                rotate_save_meta(path, target)
+            except FileExistsError as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Rotating picture failed", f"Rotating <{path}> failed. {type(e).__name__}: {e}"
+                )
+
+    @QtCore.Slot()
+    def on_edit_rotate_cw_meta(self) -> None:
+        self._on_edit_rotate_meta("cw")
+
+    @QtCore.Slot()
+    def on_edit_rotate_ccw_meta(self) -> None:
+        self._on_edit_rotate_meta("ccw")
 
     @QtCore.Slot(bool)
     def on_fit_to_window(self, checked: bool) -> None:

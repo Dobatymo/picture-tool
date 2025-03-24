@@ -14,10 +14,11 @@ import turbojpeg
 from genutility.pillow import NoActionNeeded, fix_orientation
 from piexif._load import _ExifReader
 from PIL import Image
+from PIL import TiffImagePlugin as tiff
 from pillow_heif import register_heif_opener
 from typing_extensions import Self
 
-from .utils import extensions_raw
+from .utils import extensions_raw, get_exif_dates
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -26,9 +27,26 @@ except ImportError:
     from PySide2 import QtCore, QtGui, QtWidgets
     from PySide2.QtWidgets import QAction
 
+try:
+    from c2pa.c2pa import c2pa
+
+    from .c2pa_utils import c2pa_json
+
+    has_c2pa = True
+except ModuleNotFoundError as e:
+    has_c2pa = False
+    logging.info("C2PA verification not available: %s", e)
+
 register_heif_opener()
 
 logger = logging.getLogger(__name__)
+
+suffix2format = {
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".tif": "TIFF",
+    ".tiff": "TIFF",
+}
 
 
 class ImperfectTransform(Exception):
@@ -43,7 +61,7 @@ class QPixmapWithMeta:
         self.pixmap = pixmap
         self.meta = meta
 
-    def transformed(self, tr: QtGui.QTransform, name: str) -> Self:
+    def transformed(self, tr: QtGui.QTransform, name: str) -> "QPixmapWithMeta":
         pixmap = self.pixmap.transformed(tr)
         meta = deepcopy(self.meta)
         meta["transforms"].append(name)
@@ -202,6 +220,15 @@ def read_qt_image(
         "transforms": [],
     }
 
+    if has_c2pa:
+        try:
+            valid = not bool(c2pa_json(path).get("validation_status", []))
+            meta["c2pa"] = valid
+        except c2pa.Error.ManifestNotFound:
+            meta["c2pa"] = None
+    else:
+        meta["c2pa"] = None
+
     if path.suffix.lower() in extensions_raw:
         with rawpy.imread(_path) as raw:
             rgb = raw.postprocess()  # ndarray[h,w,c]
@@ -280,6 +307,7 @@ def read_qt_image(
                     "gps-lon": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
                 }
             )
+            meta.update(get_exif_dates(exif))
 
         if process:
             for func in process:
@@ -737,28 +765,139 @@ def crop_half_save(path: Path, target: str) -> None:
     outpath.write_bytes(img)
 
 
-def rotate_save(path: Path, target: str) -> None:
+def rotate_save(path: Path, target: str, format: Optional[str] = None) -> None:
+    if format is None:
+        try:
+            format = suffix2format[path.suffix]
+        except KeyError:
+            raise ValueError(f"Unsupported file extension: {path.suffix}") from None
+
+    outpath = path.with_suffix(f".rotated{path.suffix}")
+    if outpath.exists():
+        raise FileExistsError(outpath)
+
+    if format == "JPEG":
+        imgb = path.read_bytes()
+        imgb = jpeg_fix_orientation(imgb, perfect=True)
+        exif = piexif.load(imgb)
+
+        if target == "cw":
+            op = turbojpeg.OP.ROT90
+        elif target == "180":
+            op = turbojpeg.OP.ROT180
+        elif target == "ccw":
+            op = turbojpeg.OP.ROT270
+        else:
+            raise ValueError(f"Unsupported target: {target}")
+
+        with TranslateTjException():
+            imgb = turbojpeg.transform(imgb, op, perfect=True)
+
+        imgb = _fix_thumbnail(imgb, exif, op=op)
+
+        outpath.write_bytes(imgb)
+    elif format == "TIFF":
+        with Image.open(path) as img:
+            format = img.format
+            compression = img.info["compression"]
+            exif = img.info.get("exif")
+            mode = img.mode
+            dpi = img.info["dpi"]
+            icc_profile = img.info.get("icc_profile")
+            tiffinfo = img.tag_v2
+
+            # these are set correctly by the tiff image writer
+            del tiffinfo[tiff.IMAGEWIDTH]
+            del tiffinfo[tiff.IMAGELENGTH]
+            del tiffinfo[tiff.X_RESOLUTION]
+            del tiffinfo[tiff.Y_RESOLUTION]
+
+            try:
+                n_frames = getattr(img, "n_frames", 1)
+            except TypeError as e:
+                raise ValueError("Failed to read `n_frames` from TIFF file") from e
+
+            if format != "TIFF" or compression not in [
+                "raw",
+                "tiff_lzw",
+                "tiff_adobe_deflate",
+                "tiff_deflate",
+                "packbits",
+            ]:
+                raise ValueError("Only lossless TIFF formats are supported")
+
+            if n_frames != 1:
+                raise ValueError("Only single image tiff files are supported")
+            if exif or icc_profile:
+                raise ValueError("TIFF files with EXIF or ICC profile are currently not supported")
+
+            if target == "cw":
+                op = Image.Transpose.ROTATE_270
+                dpi = (dpi[1], dpi[0])
+            elif target == "180":
+                op = Image.Transpose.ROTATE_180
+            elif target == "ccw":
+                op = Image.Transpose.ROTATE_90
+                dpi = (dpi[1], dpi[0])
+            else:
+                raise ValueError(f"Unsupported target: {target}")
+
+            img = img.transpose(op)
+            assert mode == img.mode, f"Mode changed from {mode} to {img.mode}"
+
+            kwargs = {"compression": compression, "tiffinfo": tiffinfo, "dpi": dpi}
+            kwargs = {k: v for k, v in kwargs.items() if v is not None}
+            img.save(outpath, format=format, **kwargs)
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+
+
+def rotate_save_meta(path: Path, target: str) -> None:
     img = path.read_bytes()
 
     outpath = path.with_suffix(f".rotated{path.suffix}")
     if outpath.exists():
         raise FileExistsError(outpath)
 
-    img = jpeg_fix_orientation(img, perfect=True)
     exif = piexif.load(img)
 
+    try:
+        orientation = exif["0th"][piexif.ImageIFD.Orientation]
+    except KeyError:
+        orientation = 1
+
     if target == "cw":
-        op = turbojpeg.OP.ROT90
+        d = {
+            1: 6,
+            8: 1,
+            3: 8,
+            6: 3,
+        }
     elif target == "180":
-        op = turbojpeg.OP.ROT180
+        d = {
+            1: 3,
+            8: 6,
+            3: 1,
+            6: 8,
+        }
     elif target == "ccw":
-        op = turbojpeg.OP.ROT270
+        d = {
+            1: 8,
+            8: 3,
+            3: 6,
+            6: 1,
+        }
     else:
         raise ValueError(f"Unsupported target: {target}")
 
-    with TranslateTjException():
-        img = turbojpeg.transform(img, op, perfect=True)
+    try:
+        orientation_new = d[orientation]
+    except KeyError:
+        raise ValueError(f"Unsupported orientation: {orientation}") from None
 
-    img = _fix_thumbnail(img, exif, op=op)
+    exif["0th"][piexif.ImageIFD.Orientation] = orientation_new
 
-    outpath.write_bytes(img)
+    logging.warning("Converting %s %s to %s", target, orientation, orientation_new)
+
+    exif_bytes = piexif.dump(exif)
+    piexif.insert(exif_bytes, img, os.fspath(outpath))

@@ -4,7 +4,7 @@ import shutil
 from io import BytesIO
 from pathlib import Path
 from queue import Queue
-from typing import Iterator, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import piexif
 from filemeta.exif import exif_table
@@ -15,9 +15,9 @@ from genutility.filesystem import scandir_ext
 from genutility.pillow import exifinfo
 from geopy.distance import distance as geodistance
 from geopy.geocoders import Nominatim
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from PySide2.QtCore import QDir, QPoint, QSize, Qt, QThread, Signal, Slot
-from PySide2.QtGui import QIcon, QKeyEvent, QPixmap, QWheelEvent
+from PySide2.QtGui import QCloseEvent, QIcon, QKeyEvent, QPixmap, QWheelEvent
 from PySide2.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -58,7 +58,7 @@ def icon_from_data(data: bytes) -> QIcon:
 
 class ThumbnailDB(FileDbSimple):
     @classmethod
-    def derived(cls):
+    def derived(cls) -> List[Tuple[str, str, str]]:
         return [
             ("thumbnail", "BLOB", "?"),
         ]
@@ -81,6 +81,8 @@ class ThumbnailWorker(QThread):
         stream = BytesIO()
 
         img.thumbnail(self.size)
+        if img.mode in ("F", "P", "RGBA"):
+            img = img.convert("RGB")
         img.save(stream, format="jpeg")
 
         return stream.getvalue()
@@ -98,7 +100,12 @@ class ThumbnailWorker(QThread):
             else:
                 item, path = elm
 
-            data = self.create_thumbnail(path)
+            try:
+                data = self.create_thumbnail(path)
+            except UnidentifiedImageError as e:
+                logging.warning("%s", e)
+                continue
+
             self.db.add(path, derived={"thumbnail": data}, commit=False)
             icon = icon_from_data(data)
 
@@ -109,7 +116,7 @@ class ThumbnailWorker(QThread):
 
 
 class ExifDialog(QDialog):
-    def __init__(self, path: Path, parent, **kwargs) -> None:
+    def __init__(self, path: Path, parent: QWidget, **kwargs) -> None:
         QDialog.__init__(self, parent, **kwargs)
 
         self.setWindowTitle("Image information")
@@ -132,10 +139,8 @@ class ExifDialog(QDialog):
 
 
 class PhotoListWidget(QListWidget):
-    def __init__(self, dbpath: str = "thumbs.sqlite", iconsize: Tuple[int, int] = (200, 200), **kwargs) -> None:
+    def __init__(self, dbpath: str = "thumbs.sqlite", iconsize: Tuple[int, int] = (200, 200), **kwargs: Any) -> None:
         QListWidget.__init__(self, **kwargs)
-
-        self.db = ThumbnailDB(dbpath)
 
         self.icon_x, self.icon_y = iconsize
         self.m_factor = 1.5
@@ -151,15 +156,20 @@ class PhotoListWidget(QListWidget):
         with open(PLACEHOLDER_PATH, "rb") as fr:
             self.placeholder_icon = icon_from_data(fr.read())
 
+        self.db = ThumbnailDB(dbpath)
         self.thumbsqueue: ThumbsQueueT = Queue()
         self.thumbsthread = ThumbnailWorker(self.db, self.thumbsqueue, iconsize)
         self.thumbsthread.signal.connect(self.thumbs_signal_handler)
         self.thumbsthread.start()
 
-    def __del__(self):
-        self.db.close()
-        self.thumbsthread.stop()
-        self.thumbsthread.wait()
+    def close(self) -> None:
+        if self.thumbsthread is not None:
+            self.thumbsthread.stop()
+            if not self.thumbsthread.wait(1000):
+                logging.error("Background thread failed to exit in time")
+
+        if self.db is not None:
+            self.db.close()
 
     def get_thumb_from_db(self, path: Path) -> bytes:
         (data,) = self.db.get(path, only=("thumbnail",))
@@ -260,11 +270,11 @@ class PhotoListWidget(QListWidget):
     def queue_thumbnail(self, item: QListWidgetItem, path: Path) -> None:
         self.thumbsqueue.put((item, path))
 
-    def queue_commit(self):
+    def queue_commit(self) -> None:
         self.thumbsqueue.put("commit")
 
     @Slot(QListWidgetItem, QIcon)
-    def thumbs_signal_handler(self, item: QListWidgetItem, icon: QIcon):
+    def thumbs_signal_handler(self, item: QListWidgetItem, icon: QIcon) -> None:
         item.setIcon(icon)
 
     def load_from_path(self, basepath: Path) -> None:
@@ -283,8 +293,13 @@ class PhotoListWidget(QListWidget):
                 data = self.get_thumb_from_db(path)
                 item = self.addItemFromData(path, data)
             except NoResult:
-                exif_dict = piexif.load(os.fspath(path))
-                data = exif_dict["thumbnail"]
+                try:
+                    exif_dict = piexif.load(os.fspath(path))
+                except piexif.InvalidImageDataError:
+                    data = None
+                else:
+                    data = exif_dict["thumbnail"]
+
                 if data:
                     item = self.addItemFromData(path, data)
                 else:
@@ -329,7 +344,7 @@ class MyWidget(QWidget):
         self.button_browse.clicked.connect(self.slot_browse_dialog)
         self.searchfield.lineEdit().returnPressed.connect(self.slot_search)
         self.button_search.clicked.connect(self.slot_search)
-        self.button_close.clicked.connect(self.slot_close)
+        self.button_close.clicked.connect(self.close)
 
         menubar = QMenuBar()
         self.layout.setMenuBar(menubar)
@@ -338,7 +353,7 @@ class MyWidget(QWidget):
         menu_file.addAction("Browse")
         menu_file.addAction("Open viewer")
         action_quit = menu_file.addAction("Quit")
-        action_quit.triggered.connect(self.slot_close)
+        action_quit.triggered.connect(self.close)
 
         menubar.addMenu("Settings")
         menu_help = menubar.addMenu("Help")
@@ -362,7 +377,7 @@ class MyWidget(QWidget):
 
             self.viewer.load_from_path(Path(directory))
 
-    def load_path_location(self, lat, lon) -> None:
+    def load_path_location(self, lat: float, lon: float) -> None:
         def iterdirs_with_distances() -> Iterator[Tuple[float, Path]]:
             for entry in scandir_ext(self.basepath, extensions_images):
                 path = Path(entry)
@@ -383,7 +398,7 @@ class MyWidget(QWidget):
         for _distance, path in sortedbydistance:
             self.viewer.addItemFromPath(path)
 
-    def name2longlat(self, name: str) -> None:
+    def name2longlat(self, name: str) -> Dict[str, Any]:
         return self.geolocator.geocode(name).raw
 
     @Slot()
@@ -392,11 +407,16 @@ class MyWidget(QWidget):
         if addr:
             location = cache(Path("geoloc.json"), serializer="json")(self.name2longlat)(addr)
             self.searchfield.setCurrentText(location["display_name"])
-            self.load_path_location(location["lat"], location["lon"])
+            self.load_path_location(float(location["lat"]), float(location["lon"]))
 
-    @Slot()
-    def slot_close(self) -> None:
+    def close(self) -> None:
+        logging.debug("Closing windows and shutting down background threads")
+        self.viewer.close()
+        super().close()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
         self.close()
+        event.accept()
 
 
 if __name__ == "__main__":

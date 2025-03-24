@@ -46,7 +46,7 @@ def slice_to_list(value: slice) -> list:
     return list(range(value.stop)[value])
 
 
-def iloc_by_index_and_bool(df, index: int, bool_idx: pd.Series) -> int:
+def iloc_by_index_and_bool(df: pd.DataFrame, index: int, bool_idx: pd.Series) -> int:
     if bool_idx.dtype != "bool":
         raise TypeError(f"bool_idx must be a 'bool' series, not '{bool_idx.dtype}'")
 
@@ -137,7 +137,7 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
 
         self.df.loc[group].iloc[0]["overwrite"][name] = row[name]
 
-    def set_overwrite(self, row_idx: int, name: str, val) -> None:
+    def set_overwrite(self, row_idx: int, name: str, val: Any) -> None:
         self.df.iloc[row_idx]["overwrite"][name] = val
 
     def _get_iloc_by(self, group: int, key: str, value: Any) -> int:
@@ -246,9 +246,9 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
                 if role == QtCore.Qt.DisplayRole:
                     return self.df.columns[section - 1]
                 elif role == QtCore.Qt.ToolTipRole:
-                    return f"Sort {self.df.index.name} by {self.df.columns[section-1]} of reference file"
+                    return f"Sort {self.df.index.name} by {self.df.columns[section - 1]} of reference file"
                 elif role == QtCore.Qt.StatusTipRole:
-                    return f"Sort {self.df.index.name} by {self.df.columns[section-1]} of reference file"
+                    return f"Sort {self.df.index.name} by {self.df.columns[section - 1]} of reference file"
 
         return None
 
@@ -355,7 +355,7 @@ class GroupedPictureView(QtWidgets.QTableView):
     def set_col_reference(self, index: QtCore.QModelIndex, name: str) -> None:
         self.model().set_col_reference(index.row(), name)
 
-    def set_overwrite(self, index: QtCore.QModelIndex, name: str, val, checked: bool) -> None:
+    def set_overwrite(self, index: QtCore.QModelIndex, name: str, val: Any, checked: bool) -> None:
         self.model().set_overwrite(index.row(), name, val)
 
     def set_overwrite_custom(self, index: QtCore.QModelIndex, name: str, val: str) -> None:
@@ -451,7 +451,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
         assert len(funcsargs) == len(out)
         return out
 
-    def __init__(self, df, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, df: pd.DataFrame, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.df = df
 
@@ -591,7 +591,10 @@ class PrioritizeWidget(QtWidgets.QWidget):
 
 class PrioritizeWindow(QtWidgets.QMainWindow):
     def __init__(
-        self, df, parent: Optional[QtWidgets.QWidget] = None, flags: QtCore.Qt.WindowFlags = QT_DEFAULT_WINDOW_FLAGS
+        self,
+        df: pd.DataFrame,
+        parent: Optional[QtWidgets.QWidget] = None,
+        flags: QtCore.Qt.WindowFlags = QT_DEFAULT_WINDOW_FLAGS,
     ) -> None:
         super().__init__(parent, flags)
 

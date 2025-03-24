@@ -17,12 +17,12 @@ T = TypeVar("T")
 THREADPOOL_LIMIT: Optional[int] = None
 
 
-def copy_docs(func_with_docs: Callable) -> Callable:
+def copy_docs(func_with_docs: Callable) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator to apply docstring of `func_with_docs` to decorated function."""
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
-        def inner(*args, **kwargs):
+        def inner(*args, **kwargs) -> T:
             return func(*args, **kwargs)
 
         inner.__doc__ = func_with_docs.__doc__

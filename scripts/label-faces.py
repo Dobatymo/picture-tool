@@ -206,7 +206,7 @@ class VectorStorage:
 def label(paths: Iterable[PathType], fdb: FaceStorage, vdb: VectorStorage) -> None:
     with PictureWindow() as win:
 
-        def uncached_paths(paths: PathType) -> PathType:
+        def uncached_paths(paths: Iterable[PathType]) -> Iterator[PathType]:
             for p in paths:
                 # this also skips partially labelled files
                 if not vdb.hasfile(os.fspath(p)):
