@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import webbrowser
 from collections import Counter, deque
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
@@ -36,6 +37,11 @@ from .shared_gui import (
 )
 from .utils import MyFraction, extensions_images, show_in_file_manager
 
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    from backports.strenum import StrEnum
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -51,6 +57,11 @@ class GpsDms(NamedTuple):
     lon: Sequence[Fraction]
 
 
+class FileType(StrEnum):
+    PICTURE = "picture file"
+    SIDECAR = "sidecar file"
+
+
 def gps_dms_to_dd(dms: Sequence[Fraction]) -> float:
     """Degrees Minutes Seconds to Decimal Degrees"""
 
@@ -61,6 +72,16 @@ def nice_meta(obj: Any) -> Any:
     if isinstance(obj, Fraction):
         return MyFraction(obj).limit(4, 9)
     return obj
+
+
+def get_sidecars(path: Path) -> List[Path]:
+    sidecars: List[Path] = []
+    if path.suffix.upper() in (".JPG", ".HEIC", ".PNG"):
+        for ext in (".AAE",):
+            p = path.with_suffix(ext)
+            if p.is_file():
+                sidecars.append(p)
+    return sidecars
 
 
 class PictureCache(QtCore.QObject):
@@ -630,6 +651,7 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.user_events[key] = (func, args)
 
         self.events = config.get("events", {})
+        self.confirm_move_sidecare = config.get("confirm_move_sidecare", True)
 
         if "on_date_changed" in self.events:
             self.beepthread: Optional[BeepThread] = BeepThread()
@@ -809,35 +831,60 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         if ret == QtWidgets.QMessageBox.StandardButton.Yes:
             target_dir = path.parent / subdir
+            target_dir.mkdir(parents=False, exist_ok=True)
+
             target = target_dir / path.name
-            if target.exists():
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    f"Cannot {verb[0]} file",
-                    f"<{path}> could not be {verb[1]} because <{target}> already exists.",
+            rename_actions = [(path, target, FileType.PICTURE)]
+            sidecars = get_sidecars(path)
+
+            if self.confirm_move_sidecare and sidecars:
+                paths_str = ", ".join(f"<{os.fspath(p)}>" for p in sidecars)
+                ret = QtWidgets.QMessageBox.question(
+                    self, f"{verb[2]} sidecar files?", f"Do you want to {verb[0]} sidecar files: {paths_str}?"
                 )
             else:
-                target_dir.mkdir(parents=False, exist_ok=True)
+                ret = QtWidgets.QMessageBox.StandardButton.Yes
+
+            if ret == QtWidgets.QMessageBox.StandardButton.Yes:
+                for path_sidecar in sidecars:
+                    target_sidecar = target_dir / path_sidecar.name
+                    rename_actions.append((path_sidecar, target_sidecar, FileType.SIDECAR))
+            elif ret == QtWidgets.QMessageBox.StandardButton.No:
+                pass
+            else:
+                assert False
+
+            for path, target, file_type in rename_actions:
+                if target.exists():
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        f"Cannot {verb[0]} {file_type}",
+                        f"<{path}> could not be {verb[1]} because <{target}> already exists.",
+                    )
+                    return
+
+            for path, target, file_type in rename_actions:
                 try:
                     path.rename(target)
                 except FileNotFoundError:
                     QtWidgets.QMessageBox.warning(
                         self,
-                        f"Cannot {verb[0]} file",
+                        f"Cannot {verb[0]} {file_type}",
                         f"<{path}> could not be {verb[1]} because it only existed in cache.",
                     )
+                    break  # sidecar files are not moved when the original file was not found
                 except Exception as e:
-                    logger.exception(f"Failed to {verb[0]} file <%s>", path)
+                    logger.exception("Failed to %s %s <%s>", verb[0], file_type, path)
                     QtWidgets.QMessageBox.warning(
-                        self, f"Cannot {verb[0]} file", f"<{path}> could not be {verb[1]}: {e}"
+                        self, f"Cannot {verb[0]} {file_type}", f"<{path}> could not be {verb[1]}: {e}"
                     )
                     return
-                else:
-                    self.actions.append(("move-to-subdir", path, target))  # doesn't undo `mkdir`
 
-                del_path = self.paths.pop(idx)
-                assert del_path == path
-                self._load_after_image_gone(idx)
+            self.actions.append(("move-files", rename_actions))  # doesn't undo `mkdir`
+
+            del_path = self.paths.pop(idx)
+            assert del_path == path
+            self._load_after_image_gone(idx)
         elif ret == QtWidgets.QMessageBox.StandardButton.No:
             pass
         else:
@@ -1010,22 +1057,48 @@ class PictureWindow(QtWidgets.QMainWindow):
     def on_file_rename(self) -> None:
         assert self.loaded
         name = self.loaded["path"].name
+
         while True:
             name, ok = QtWidgets.QInputDialog().getText(
                 self, "Rename file", "Filename", QtWidgets.QLineEdit.Normal, name
             )
             if ok:
                 target = self.loaded["path"].parent / name
-                if target.exists():
-                    QtWidgets.QMessageBox.warning(self, "Renaming file failed", f"{target} already exists")
+                rename_actions = [(self.loaded["path"], target, FileType.PICTURE)]
+                sidecars = get_sidecars(self.loaded["path"])
+
+                if self.confirm_move_sidecare and sidecars:
+                    paths_str = ", ".join(f"<{os.fspath(p)}>" for p in sidecars)
+                    ret = QtWidgets.QMessageBox.question(
+                        self, "Rename sidecar files?", f"Do you want to rename sidecar files: {paths_str}?"
+                    )
                 else:
-                    self.loaded["path"].rename(target)
-                    idx = self.paths.index(self.loaded["path"])
-                    self.paths[idx] = target
-                    self.setWindowTitle(f"{target.name} - {self.wm.app_name}")
-                    self.statusbar_filename.setText(target.name)
-                    self.statusbar_filename.setToolTip(os.fspath(target))
-                    break
+                    ret = QtWidgets.QMessageBox.StandardButton.Yes
+
+                if ret == QtWidgets.QMessageBox.StandardButton.Yes:
+                    for path_sidecar in sidecars:
+                        target_sidecar = path_sidecar.parent / name
+                        rename_actions.append((path_sidecar, target_sidecar, FileType.SIDECAR))
+                elif ret == QtWidgets.QMessageBox.StandardButton.No:
+                    pass
+                else:
+                    assert False
+
+                for _path, target, file_type in rename_actions:
+                    if target.exists():
+                        QtWidgets.QMessageBox.warning(self, f"Renaming {file_type} failed", f"{target} already exists")
+                        break
+                else:
+                    for path, target, file_type in rename_actions:
+                        path.rename(target)
+                        if file_type == FileType.PICTURE:
+                            idx = self.paths.index(path)
+                            self.paths[idx] = target
+                            self.setWindowTitle(f"{target.name} - {self.wm.app_name}")
+                            self.statusbar_filename.setText(target.name)
+                            self.statusbar_filename.setToolTip(os.fspath(target))
+                    self.actions.append(("rename-files", rename_actions))
+                    return
             else:
                 break
 
@@ -1171,10 +1244,11 @@ class PictureWindow(QtWidgets.QMainWindow):
         ret = QtWidgets.QMessageBox.question(self, f"Undo {actionname}?", f"Do you want to undo {actionname} {args}?")
 
         if ret == QtWidgets.QMessageBox.StandardButton.Yes:
-            if actionname == "move-to-subdir":
-                path, target = args
-                target.rename(path)
-                self.load_pictures([path])
+            if actionname == ("move-files", "rename-files"):
+                for path, target, file_type in args:
+                    target.rename(path)
+                    if file_type == FileType.PICTURE:
+                        self.load_pictures([path])
             else:
                 assert False
 

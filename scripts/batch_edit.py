@@ -81,13 +81,13 @@ def get_original_date(
 
 
 def add_date(
-    image: Image,
+    image: Image.Image,
     align: str = "BR",
     fontsize: float = 0.03,
     padding: float = 0.01,
     fillcolor: str = "white",
     outlinecolor: str = "black",
-) -> Tuple[Image, Dict[str, Any]]:
+) -> Tuple[Image.Image, Dict[str, Any]]:
     try:
         exif = piexif.load(image.info["exif"])
     except KeyError as e:

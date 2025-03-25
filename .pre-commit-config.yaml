@@ -67,8 +67,12 @@ repos:
   - id: mypy
     args: [--install-types, --non-interactive, --show-error-codes]
     additional_dependencies:
+    - backports.strenum==1.3.1; python_version < '3.11'
+    - filemeta==0.0.3
+    - geopy==2.4.1
     - genutility[callbacks,datetime,filesdb,numpy,pickle,pillow,rich,time]==0.0.103
     - humanize==4.4.0
+    - houtu==0.0.3
     - imagehash==4.3.1
     - msgpack==1.0.4
     - natsort==8.2.0
@@ -77,8 +81,9 @@ repos:
     - pandas==1.5.2
     - pandasql==0.7.3
     - piexif==1.1.3
-    - Pillow==9.2.0
-    - pillow-heif==0.7.0
+    - Pillow==10.4.0
+    - pillow-heif==0.18.0
+    - pillow-avif-plugin==1.4.6
     - platformdirs==3.5.0
     - pyarrow==10.0.1
     - pyexiv2==2.7.1
@@ -86,8 +91,6 @@ repos:
     - requests==2.28.1
     - threadpoolctl==3.1.0
     - rich==13.5.2
-    - geopy==2.3.0
-    - houtu==0.0.2
 - repo: https://github.com/Yelp/detect-secrets
   rev: v1.5.0
   hooks:

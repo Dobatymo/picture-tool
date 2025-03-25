@@ -4,7 +4,7 @@ import shutil
 from io import BytesIO
 from pathlib import Path
 from queue import Queue
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Tuple, Union
 
 import piexif
 from filemeta.exif import exif_table

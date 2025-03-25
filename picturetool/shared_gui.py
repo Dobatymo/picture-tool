@@ -222,7 +222,7 @@ def read_qt_image(
 
     if has_c2pa:
         try:
-            valid = not bool(c2pa_json(path).get("validation_status", []))
+            valid = not bool(c2pa_json(_path).get("validation_status", []))
             meta["c2pa"] = valid
         except c2pa.Error.ManifestNotFound:
             meta["c2pa"] = None
