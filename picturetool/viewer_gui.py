@@ -4,7 +4,7 @@ import sys
 import webbrowser
 from collections import Counter, deque
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta
 from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
 from multiprocessing.connection import Client, Listener
@@ -21,6 +21,7 @@ from houtu import ReverseGeocode
 from natsort import os_sorted
 from PIL import ImageOps
 from PySide2 import QtCore, QtGui, QtWidgets
+from typing_extensions import Concatenate
 
 from .shared_gui import (
     ImageTransformT,
@@ -357,6 +358,7 @@ class BeepThread(Thread):
     def __init__(self) -> None:
         super().__init__(daemon=True)
         self.q: "Queue[Tuple[int, float]]" = Queue(maxsize=2)
+        self.start()
 
     def run(self) -> None:
         from winsound import Beep
@@ -365,7 +367,7 @@ class BeepThread(Thread):
             frequency, duration = self.q.get()
             Beep(frequency, int(duration * 1000))
 
-    def play(self, frequency: int, duration: float) -> bool:
+    def __call__(self, frequency: int, duration: float) -> bool:
         """Play a beep sound. Frequency in Hz and duration in seconds."""
 
         try:
@@ -630,12 +632,16 @@ class PictureWindow(QtWidgets.QMainWindow):
         if self.resolve_city_names and PictureWindow.rg is None:
             PictureWindow.rg = ReverseGeocode()
 
-        self.user_events: Dict[QtCore.Qt.Key, Tuple[Callable, tuple]] = {}
-        user_funcs_map = {
+        self.user_events: Dict[QtCore.Qt.Key, Tuple[Callable[Concatenate[Path, int, ...], None], tuple]] = {}
+        self.events: Dict[str, Tuple[Callable, tuple]] = {}
+
+        user_funcs_map: Dict[str, Callable[Concatenate[Path, int, ...], None]] = {
             "move_to_subdir": self.move_to_subdir,
         }
+        event_classes: Dict[str, Callable[[], Callable]] = {"beep": BeepThread}
 
         for k, (funcname, args) in config.get("user_events", {}).items():
+            assert isinstance(args, list)
             try:
                 key = getattr(QtCore.Qt.Key, k)
             except AttributeError:
@@ -648,17 +654,24 @@ class PictureWindow(QtWidgets.QMainWindow):
                 logger.error("Invalid function name %s", funcname)
                 continue
 
-            self.user_events[key] = (func, args)
+            self.user_events[key] = (func, tuple(args))
 
-        self.events = config.get("events", {})
+        event_class_instances: Dict[str, Callable[..., None]] = {}
+        for key, (funcname, args) in config.get("events", {}).items():
+            assert isinstance(args, list)
+            try:
+                obj = event_class_instances[funcname]
+            except KeyError:
+                try:
+                    cls = event_classes[funcname]
+                except KeyError:
+                    logger.error("Invalid function name %s", funcname)
+                    continue
+                else:
+                    obj = event_class_instances[funcname] = cls()
+            self.events[key] = (obj, tuple(args))
+
         self.confirm_move_sidecare = config.get("confirm_move_sidecare", True)
-
-        if "on_date_changed" in self.events:
-            self.beepthread: Optional[BeepThread] = BeepThread()
-            self.beepthread.start()
-        else:
-            self.beepthread = None
-
         self.actions: Deque = deque(maxlen=UNDO_LIST_SIZE)
 
     def _gps(self) -> GpsDms:
@@ -818,7 +831,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         else:
             self._view_clear()
 
-    def move_to_subdir(self, path, idx, subdir, mode: str, ask: bool) -> None:
+    def move_to_subdir(self, path: Path, idx: int, subdir: str, mode: str, ask: bool) -> None:
         verb = {
             "move": ("move", "moved", "Move"),
             "delete": ("delete", "deleted", "Delete"),
@@ -854,36 +867,36 @@ class PictureWindow(QtWidgets.QMainWindow):
             else:
                 assert False
 
-            for path, target, file_type in rename_actions:
+            for p, target, file_type in rename_actions:
                 if target.exists():
                     QtWidgets.QMessageBox.warning(
                         self,
                         f"Cannot {verb[0]} {file_type}",
-                        f"<{path}> could not be {verb[1]} because <{target}> already exists.",
+                        f"<{p}> could not be {verb[1]} because <{target}> already exists.",
                     )
                     return
 
-            for path, target, file_type in rename_actions:
+            for p, target, file_type in rename_actions:
                 try:
-                    path.rename(target)
+                    p.rename(target)
                 except FileNotFoundError:
                     QtWidgets.QMessageBox.warning(
                         self,
                         f"Cannot {verb[0]} {file_type}",
-                        f"<{path}> could not be {verb[1]} because it only existed in cache.",
+                        f"<{p}> could not be {verb[1]} because it only existed in cache.",
                     )
                     break  # sidecar files are not moved when the original file was not found
                 except Exception as e:
-                    logger.exception("Failed to %s %s <%s>", verb[0], file_type, path)
+                    logger.exception("Failed to %s %s <%s>", verb[0], file_type, p)
                     QtWidgets.QMessageBox.warning(
-                        self, f"Cannot {verb[0]} {file_type}", f"<{path}> could not be {verb[1]}: {e}"
+                        self, f"Cannot {verb[0]} {file_type}", f"<{p}> could not be {verb[1]}: {e}"
                     )
                     return
 
             self.actions.append(("move-files", rename_actions))  # doesn't undo `mkdir`
 
             del_path = self.paths.pop(idx)
-            assert del_path == path
+            assert del_path == path, f"Deleted {path} from disk, but removed {del_path} from viewer"
             self._load_after_image_gone(idx)
         elif ret == QtWidgets.QMessageBox.StandardButton.No:
             pass
@@ -949,6 +962,20 @@ class PictureWindow(QtWidgets.QMainWindow):
 
     # signal handlers
 
+    def on_date_changed(self, prev_date: Optional[datetime], current_date: Optional[datetime]) -> None:
+        try:
+            func, args = self.events["on_date_changed"]
+        except KeyError:
+            pass
+        else:
+            if prev_date and current_date:
+                date_changed = current_date.date() != prev_date.date()
+            else:
+                date_changed = False
+
+            if date_changed:
+                func(*args)
+
     @QtCore.Slot(Path, QImageWithBuffer)
     def on_pic_loaded(self, path: Path, frame: int, image: QImageWithBuffer) -> None:
         idx = self.paths.index(path)
@@ -960,15 +987,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.loaded = {"path": path, "frame": frame, "idx": idx, "meta": image.meta}
         current_date = self.loaded["meta"].get("original")
 
-        if "on_date_changed" in self.events:
-            if prev_date and current_date:
-                date_changed = current_date.date() != prev_date.date()
-            else:
-                date_changed = False
-
-            if date_changed:
-                assert self.beepthread is not None
-                self.beepthread.play(440, 0.5)
+        self.on_date_changed(prev_date, current_date)
 
         self.setWindowTitle(f"{path.name} - {self.wm.app_name}")
         self.statusbar_number.setText(f"{idx + 1}/{len(self.paths)}")
@@ -1012,7 +1031,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         idx = self.paths.index(path)
         if isinstance(e, FileNotFoundError):
             del_path = self.paths.pop(idx)
-            assert del_path == path
+            assert del_path == path, f"{path} was not found on disk, but {del_path} was removed from viewer"
             self._load_after_image_gone(idx)
         elif isinstance(e, CancelledError):
             pass

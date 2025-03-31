@@ -11,6 +11,8 @@ Download cv2 models
 - `curl https://raw.githubusercontent.com/opencv/opencv_contrib/master/modules/quality/samples/brisque_range_live.yml -o brisque_range_live.yml`
 - `curl https://raw.githubusercontent.com/opencv/opencv_contrib/master/modules/quality/samples/brisque_model_live.yml -o brisque_model_live.yml`
 
+Install cmake and have cmake in `PATH`.
+
 ## Statistics
 
 - `py statistics.py --help`
