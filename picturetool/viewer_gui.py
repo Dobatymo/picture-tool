@@ -63,6 +63,11 @@ class FileType(StrEnum):
     SIDECAR = "sidecar file"
 
 
+class Action(StrEnum):
+    MOVE_FILES = "move-files"
+    RENAME_FILES = "rename-files"
+
+
 def gps_dms_to_dd(dms: Sequence[Fraction]) -> float:
     """Degrees Minutes Seconds to Decimal Degrees"""
 
@@ -893,7 +898,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                     )
                     return
 
-            self.actions.append(("move-files", rename_actions))  # doesn't undo `mkdir`
+            self.actions.append((Action.MOVE_FILES, rename_actions))  # doesn't undo `mkdir`
 
             del_path = self.paths.pop(idx)
             assert del_path == path, f"Deleted {path} from disk, but removed {del_path} from viewer"
@@ -1116,7 +1121,7 @@ class PictureWindow(QtWidgets.QMainWindow):
                             self.setWindowTitle(f"{target.name} - {self.wm.app_name}")
                             self.statusbar_filename.setText(target.name)
                             self.statusbar_filename.setToolTip(os.fspath(target))
-                    self.actions.append(("rename-files", rename_actions))
+                    self.actions.append((Action.RENAME_FILES, rename_actions))
                     return
             else:
                 break
@@ -1259,17 +1264,17 @@ class PictureWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Undo", "Nothing to undo!")
             return
 
-        actionname, *args = self.actions[-1]
+        actionname, args = self.actions[-1]
         ret = QtWidgets.QMessageBox.question(self, f"Undo {actionname}?", f"Do you want to undo {actionname} {args}?")
 
         if ret == QtWidgets.QMessageBox.StandardButton.Yes:
-            if actionname == ("move-files", "rename-files"):
+            if actionname in (Action.MOVE_FILES, Action.RENAME_FILES):
                 for path, target, file_type in args:
                     target.rename(path)
                     if file_type == FileType.PICTURE:
                         self.load_pictures([path])
             else:
-                assert False
+                assert False, actionname
 
             self.actions.pop()
         elif ret == QtWidgets.QMessageBox.StandardButton.No:
