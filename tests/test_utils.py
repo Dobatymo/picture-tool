@@ -203,6 +203,7 @@ class TestUtils(MyTestCase):
         (b"2000:01:01 00:00:00", b"123\0", None, datetime.fromisoformat("2000-01-01T00:00:00.123")),
         (b"2000:01:01 00:00:00", b"123", b"+0100", datetime.fromisoformat("2000-01-01T00:00:00.123+01:00")),
         (b"2000:01:01 00:00:00", None, b"+0100\0", datetime.fromisoformat("2000-01-01T00:00:00+01:00")),
+        (b"", None, None, None),
     )
     def test_make_datetime(self, date, subsec, offset, truth):
         result = make_datetime(date, subsec, offset)
@@ -212,7 +213,6 @@ class TestUtils(MyTestCase):
         (b"2000:01:01 00:00:00\xff", None, None, UnicodeDecodeError),
         (b"2000:02:30 00:00:00", None, None, ValueError),
         (b"0:0:0 0:0:0", None, None, ValueError),
-        (b"", None, None, ValueError),
         (b"asd", None, None, ValueError),
     )
     def test_make_datetime_fail(self, date, subsec, offset, exception):
