@@ -2,6 +2,15 @@
 
 This is a collection of several picture/image/photo related software.
 
+## build
+
+- `torch` is only available as wheels for x64 for macOS for `<2.3`. `>=2.3` only has wheels for arm64.
+- `scikit-image==0.18.3` (used for Python 3.8 and 3.9) only has x64 wheels available.
+
+Because of that, Python 3.8 and 3.9 is tested with macOS 13 x64 on GitHub.
+
+# scripts
+
 ## quality.py
 
 ### Setup
@@ -67,7 +76,7 @@ Find all pictures taken with an iPhone XR and show the file paths.
 
 Find all pictures taken by a Canon EOS camera using SQL query.
 
-## Features I would like to have
+### Features I would like to have
 
 - support metadata: filesystem, Exif, IPTC, XMP, ...
 - support inferred metadata: technical/aesthetic quality score, orientation, persons, setting, objects
