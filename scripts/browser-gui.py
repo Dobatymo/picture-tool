@@ -1,6 +1,8 @@
 import logging
 import os
 import shutil
+import sys
+from argparse import ArgumentParser
 from io import BytesIO
 from pathlib import Path
 from queue import Queue
@@ -419,10 +421,7 @@ class MyWidget(QWidget):
         event.accept()
 
 
-if __name__ == "__main__":
-    import sys
-    from argparse import ArgumentParser
-
+def main():
     parser = ArgumentParser()
     parser.add_argument("path", default=Path.cwd(), nargs="?")
     args = parser.parse_args()
@@ -437,3 +436,7 @@ if __name__ == "__main__":
     widget.show()
 
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

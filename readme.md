@@ -9,7 +9,143 @@ This is a collection of several picture/image/photo related software.
 
 Because of that, Python 3.8 and 3.9 is tested with macOS 13 x64 on GitHub.
 
-# scripts
+# Install
+
+```sh
+py -m pip install poetry
+py -m poetry install -E gui
+```
+
+# Apps
+
+## viewer-gui (usable)
+
+Run `py -m poetry run viewer-gui`.
+
+### Features
+- supported file formats JPEG, PNG, BMP, GIF, TIFF, heic, webp (and more)
+- supported raw formats DNG, ARW, NEF, CR2, CR3 (no exif)
+- support for multi image files like GIF, TIFF
+- two-way image buffer and preload (going forward and backward to next/previous image)
+- rotate for viewing based on exif data
+- user defined hotkeys for (some) custom functions (like move-to-subdir
+- view filters: grayscale, histogram normalization
+- gamma correction (only for displaying PNG so far)
+
+## find-dups (usable)
+
+Find close or exact image duplicates.
+
+### Features
+
+- dupe modes: file hash, perceptual hash, filesize
+- multiprocessing
+- export results as csv (and include metadata)
+- cache results in local database
+
+### CLI
+
+```
+usage: find-dups.py [-h] [--extensions .EXT [.EXT ...]] [-r] [-v] [--mode {file-hash,image-hash,phash}] [--hashdb PATH] [--normalize OP [OP ...]]
+                    [--resolution-normalized N N] [--parallel-read N] [--chunksize N] [--out PATH] [--ntfy-topic NTFY_TOPIC] [--overwrite-cache] [--version]
+                    DIR [DIR ...]
+
+Find picture duplicates
+
+positional arguments:
+  DIR                   Input directories
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --extensions .EXT [.EXT ...]
+                        Image file extensions (default: ('.jpg', '.jpeg', '.heic', '.heif', '.png', '.webp'))
+  -r, --recursive       Read directories recursively (default: False)
+  -v, --verbose         Verbose output (default: False)
+  --mode {file-hash,image-hash,phash}
+                        Hashing mode. `file-hash` simply hashes the whole file. `image-hash` hashes the uncompressed image data of the file and normalizes the
+                        rotation. `phash` calculates the perceptual hash of the image. (default: image-hash)
+  --hashdb PATH         Path to sqlite database file to store hashes. (default: C:\Users\<username>\AppData\Local\Dobatymo\picture-tool\hashes.sqlite)
+  --normalize OP [OP ...]
+                        Normalization operations. Ie. when orientation is normalized, files with different orientations can be detected as duplicates
+                        (default: ('orientation', 'resolution', 'colors'))
+  --resolution-normalized N N
+                        All pictures will be resized to this resolution prior to comparison. It should be smaller than the smallest picture in one duplicate
+                        group. If it's smaller, more differences in image details will be ignored. (default: (256, 256))
+  --parallel-read N     Default read concurrency (default: 4)
+  --chunksize N         Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory. (default: 2000)
+  --out PATH            Write results to file. Otherwise they are written to stdout. (default: None)
+  --ntfy-topic NTFY_TOPIC
+                        Get notifications using *ntfy* topics. Useful for long-running scans. (default: dobatymo-xjMiBan0A)
+  --overwrite-cache     Update cached values (default: False)
+  --version             show program's version number and exit
+```
+
+## compare-gui (usable)
+
+GUI to compare pairs of images. Open images lists created by `find-dups` for example.
+
+### Features
+- show groups of files in table
+  - sortable by columns
+  - change priority of files (all apart from top priority are checkable)
+- image view to quickly switch between dupe groups and display basic meta info
+- mass prioritization dialog window
+  - multiple criteria
+  - multiple ranking functions based on user input
+- load/save multiple file formats
+
+## batch-edit / batch-edit-gui
+
+Run `py -m poetry run batch-edit` / `py -m poetry run batch-edit-gui`
+
+
+### Features
+
+- Add date stamps to pictures. The date/time is read from the EXIF information.
+- Resize
+- Rotate according to EXIF orientation
+
+### CLI
+
+```
+usage: batch-edit.cmd [-h] [--extensions EXTENSIONS [EXTENSIONS ...]] [-r] [-q QUALITY] [--move MOVE] [--resize]
+                      [--add-date] [--rotate] [-a {TL,TC,TR,BL,BC,BR}] [-p FONTSIZE] [--padding PADDING] [--fill FILL]
+                      [--outline OUTLINE] [--maxsize W H W H]
+                      path
+
+positional arguments:
+  path                  Directory with image files
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --extensions EXTENSIONS [EXTENSIONS ...]
+  -r, --recursive       Process directory recursively. (default: False)
+  -q QUALITY, --quality QUALITY
+                        JPEG quality level. (default: 90)
+  --move MOVE           Move original files to this subdirectory after processing. (default: None)
+  --resize              Downsize image. (default: False)
+  --add-date            Add date string to image. Implies --rotate. (default: False)
+  --rotate              Rotate image according on exif info. (default: False)
+  -a {TL,TC,TR,BL,BC,BR}, --align {TL,TC,TR,BL,BC,BR}
+                        The corner alignment of the date string. TL is top left, BC is bottom center, and so on.
+                        (default: BR)
+  -p FONTSIZE, --fontsize FONTSIZE
+                        Fontsize ratio relative to the image height (default: 0.03)
+  --padding PADDING     Padding ratio relative to the image size (default: 0.01)
+  --fill FILL           Font fill color (default: white)
+  --outline OUTLINE     Font outline color (default: black)
+  --maxsize W H W H     Downsize so the images dimensions don't exceed W x H (default: None)
+```
+
+## browser-gui (incomplete)
+
+Run `py -m poetry run browser-gui`
+
+### Features
+
+- show image thumbnails in folder
+- show exif data for image
+
 
 ## quality.py
 
@@ -94,40 +230,3 @@ Find all pictures taken by a Canon EOS camera using SQL query.
 	- standard prune operation: delete to bin, delete, move to dir, copy to dir, replace with (sym/hard-link)
 	- remember pruned files and optionally auto-prune new previously pruned files
 - GUI: browse image using map based on GPS or other meta data
-
-## find-dups
-
-```
-usage: find-dups.py [-h] [--extensions .EXT [.EXT ...]] [-r] [-v] [--mode {file-hash,image-hash,phash}] [--hashdb PATH] [--normalize OP [OP ...]]
-                    [--resolution-normalized N N] [--parallel-read N] [--chunksize N] [--out PATH] [--ntfy-topic NTFY_TOPIC] [--overwrite-cache] [--version]
-                    DIR [DIR ...]
-
-Find picture duplicates
-
-positional arguments:
-  DIR                   Input directories
-
-optional arguments:
-  -h, --help            show this help message and exit
-  --extensions .EXT [.EXT ...]
-                        Image file extensions (default: ('.jpg', '.jpeg', '.heic', '.heif', '.png', '.webp'))
-  -r, --recursive       Read directories recursively (default: False)
-  -v, --verbose         Verbose output (default: False)
-  --mode {file-hash,image-hash,phash}
-                        Hashing mode. `file-hash` simply hashes the whole file. `image-hash` hashes the uncompressed image data of the file and normalizes the
-                        rotation. `phash` calculates the perceptual hash of the image. (default: image-hash)
-  --hashdb PATH         Path to sqlite database file to store hashes. (default: C:\Users\<username>\AppData\Local\Dobatymo\picture-tool\hashes.sqlite)
-  --normalize OP [OP ...]
-                        Normalization operations. Ie. when orientation is normalized, files with different orientations can be detected as duplicates
-                        (default: ('orientation', 'resolution', 'colors'))
-  --resolution-normalized N N
-                        All pictures will be resized to this resolution prior to comparison. It should be smaller than the smallest picture in one duplicate
-                        group. If it's smaller, more differences in image details will be ignored. (default: (256, 256))
-  --parallel-read N     Default read concurrency (default: 4)
-  --chunksize N         Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory. (default: 2000)
-  --out PATH            Write results to file. Otherwise they are written to stdout. (default: None)
-  --ntfy-topic NTFY_TOPIC
-                        Get notifications using *ntfy* topics. Useful for long-running scans. (default: dobatymo-xjMiBan0A)
-  --overwrite-cache     Update cached values (default: False)
-  --version             show program's version number and exit
-```

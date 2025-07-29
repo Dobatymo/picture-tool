@@ -1,12 +1,4 @@
-# batch-edit
-
-## implemented features
-
-- Add date stamps to pictures. The date/time is read from the EXIF information.
-- resize
-- rotate according to exif orientation
-
-# viewer
+# viewer-gui
 
 ## goals
 
@@ -23,16 +15,6 @@
   - filters only applied to view (possibly with sidecar files)
 4. multi-platform
 
-## implemented features
-
-- supported file formats JPEG, PNG, BMP, GIF, TIFF, heic, webp (and more)
-- supported raw formats DNG, ARW, NEF, CR2, CR3 (no exif)
-- support for multi image files like GIF, TIFF
-- two-way image buffer and preload (going forward and backward to next/previous image)
-- rotate for viewing based on exif data
-- user defined hotkeys for (some) custom functions
-- view filters: grayscale, histogram normalization
-- gamma correction (only for displaying png so far)
 
 ## missing features
 
@@ -68,45 +50,14 @@
 - XnView MP (Windows 7+, Mac 10.13+, Linux)
 - ImageGlass: open source, slow
 
-# compare-gui
-
-## implemented features
-
-- show groups of files in table
-  - sortable by columns
-  - change priority of files (all apart from top priority are checkable)
-- image view to quickly switch between dup groups and display basic meta info
-- mass prioritization dialog window
-  - multiple criteria
-  - multiple ranking functions based on user input
-- load/safe multiple file formats
-
-## missing features
-
-- show visual diff to reference
-- mass update metadata overwrite (similar to prioritize window)
-- advanced meta data like quality scores
-
-# browser-gui
-
-## missing features
-
-- integrate with viewer-gui
-
 # find-dups
-
-## implemented features
-
-- dup modes: file hash, perceptual hash, filesize
-- multiprocessing
-- export results as csv (and include metadata)
 
 ## missing features
 
 - folder modes: multiple folder inputs, combine them or treat all of them separately. two folder mode: find dups from first folder in second, but not within the same folder
 - ignore files based on meta data, ie. filesize, resolution, ...
 
-### alternatives
+## alternatives
 
 - qarmin/czkawka
 - arsenetar/dupeguru
@@ -126,3 +77,20 @@
 ## resources
 
 - https://rmlint.readthedocs.io/en/latest/cautions.html
+
+
+# compare-gui
+
+## missing features
+
+- show visual diff to reference
+- mass update metadata overwrite (similar to prioritize window)
+- advanced meta data like quality scores
+
+# batch-edit / batch-edit-gui
+
+# browser-gui
+
+## missing features
+
+- integrate with viewer-gui

@@ -6,6 +6,7 @@ from datetime import timedelta, timezone
 from functools import lru_cache, partial
 from inspect import signature
 from itertools import chain
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import humanize
@@ -678,7 +679,7 @@ class PictureWidget(QtWidgets.QWidget):
         self.pic_path = path
 
         try:
-            pixmap = self.read_qt_pixmap(path)
+            pixmap = self.read_qt_pixmap(Path(path))
 
             # fixme: This can disable scale normalization if there's no width/high information.
             # There are not GUI indicators for this however.

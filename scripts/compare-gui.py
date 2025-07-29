@@ -2,7 +2,9 @@
 import logging
 import os
 import sys
+from argparse import ArgumentParser
 
+from genutility.args import is_file
 from PySide2 import QtWidgets
 
 from picturetool.compare_gui import TableWindow
@@ -11,11 +13,7 @@ APP_NAME = "compare-gui"
 PIC_CACHE_SIZE = 4
 
 
-if __name__ == "__main__":
-    from argparse import ArgumentParser
-
-    from genutility.args import is_file
-
+def main():
     parser = ArgumentParser()
     parser.add_argument("--in-path", type=is_file, help="Allowed file types are csv, parquet and json")
     parser.add_argument("-v", "--verbose", action="store_true", help="Log additional information useful for debugging")
@@ -36,3 +34,7 @@ if __name__ == "__main__":
     widget.show()
 
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

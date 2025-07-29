@@ -1,11 +1,13 @@
 import logging
 import os.path
 import sys
+from argparse import ArgumentParser
 from logging.handlers import TimedRotatingFileHandler
 from multiprocessing.connection import Client
 from pathlib import Path
 from typing import Optional
 
+from genutility.args import existing_path
 from platformdirs import user_config_dir, user_log_dir
 
 APP_AUTHOR = "Dobatymo"
@@ -20,11 +22,7 @@ def try_send(name: str, msg: Optional[dict]) -> None:
         sys.exit(0)
 
 
-if __name__ == "__main__":
-    from argparse import ArgumentParser
-
-    from genutility.args import existing_path
-
+def main():
     parser = ArgumentParser()
     parser.add_argument(
         "paths",
@@ -124,3 +122,7 @@ if __name__ == "__main__":
 
     logging.debug("App exit code: %d", ret)
     sys.exit(ret)
+
+
+if __name__ == "__main__":
+    main()
