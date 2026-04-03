@@ -1,13 +1,20 @@
 import logging
 import os
+import struct
+import sys
+from functools import partial
 from pathlib import Path
-from typing import Iterable, Iterator, Union
+from typing import Any, Iterable, Iterator, List, Set, Tuple, Union
 
 import pandas as pd
 from filemeta.exif import InvalidImageDataError, exif_table
 from genutility.cache import cache
 from genutility.datetime import datetime_from_utc_timestamp_ns
+from genutility.rich import Progress
 from pandasql import sqldf
+from PIL import UnidentifiedImageError
+from rich.logging import RichHandler
+from rich.progress import Progress as RichProgress
 
 EntryLike = Union[Path, os.DirEntry]
 
@@ -94,40 +101,64 @@ ALL_COLUMNS = [
     "GPS GPS speed reference",
     "File modification time",
 ]
+supported_extensions = {".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".heic"}  # ".wav", ".png" not supported by piexif
 
 
-def get_dataframe_by_iter(pathiter: Iterable[EntryLike]) -> pd.DataFrame:
-    values = []
-    for path in pathiter:
+def get_dataframe_by_iter(pathiter: Iterable[EntryLike], progress: Progress) -> pd.DataFrame:
+    values: List[Tuple[EntryLike, str, str, Any, Any]] = []
+
+    for path in progress.track(pathiter):
         filepath = os.fspath(path)
         filesize = path.stat().st_size
         mtime = path.stat().st_mtime_ns
 
-        values.append([filepath, "filesize", "File size", filesize, filesize])
+        values.append((filepath, "filesize", "File size", filesize, filesize))
         values.append(
-            [filepath, "mtime", "File modification time", mtime, datetime_from_utc_timestamp_ns(mtime, aslocal=True)]
+            (
+                filepath,
+                "mtime",
+                "File modification time",
+                mtime,
+                datetime_from_utc_timestamp_ns(mtime, aslocal=True),
+            )
         )
 
         try:
             for ifd, key, key_label, value, value_label in exif_table(filepath):
-                values.append([filepath, ifd + "-" + key, ifd + " " + key_label, value, value_label])
+                values.append((filepath, ifd + "-" + key, ifd + " " + key_label, value, value_label))
         except InvalidImageDataError as e:
             logger.warning("%s is not an image file with valid exif data: %s", path, e)
+        except UnidentifiedImageError as e:
+            logger.warning("%s is not a valid image file: %s", path, e)
+        except struct.error as e:
+            logger.warning("%s is not a valid image file: %s", path, e)
 
     df = pd.DataFrame(values, columns=("path", "key", "key_label", "value", "value_label"))
     df = df.pivot(index="path", columns="key_label", values="value_label")
     return df
 
 
-def get_dataframe_by_path(path: Path) -> pd.DataFrame:
-    extensions = {".jpg", ".jpeg", ".tif", ".tiff", ".webp"}  # ".wav", ".png" not supported by piexif
+def get_dataframe_by_path(path: Path, extensions: Set[str], lazy: bool = False) -> pd.DataFrame:
 
-    def it(path: Path) -> Iterator[Path]:
-        for p in path.rglob("*"):
-            if p.suffix.lower() in extensions:
-                yield p
+    from rich.spinner import Spinner
 
-    return get_dataframe_by_iter(it(path))
+    with RichProgress() as p:
+        progress = Progress(p)
+
+        def it(path: Path) -> Iterator[Path]:
+            for p in path.rglob("*"):
+                if p.suffix.lower() in extensions:
+                    yield p
+
+        if lazy:
+            theit = it(path)
+        else:
+            spinner = Spinner("dots", "Collecting files")
+            progress.set_epilog(spinner)
+            theit = list(it(path))
+            progress.set_epilog(None)
+
+        return get_dataframe_by_iter(theit, progress)
 
 
 if __name__ == "__main__":
@@ -157,12 +188,15 @@ Find all pictures taken by a Canon EOS camera using SQL query.
         formatter_class=RawDescriptionHelpFormatter,
     )
     parser.add_argument("paths", metavar="PATH", nargs="+", type=is_dir, help="Input directories to scan")
+    parser.add_argument("--extensions", nargs="+", choices=supported_extensions, help="File extensions to read")
     parser.add_argument("--rebuild-cache", action="store_true", help="Forces a cache rebuild")
     parser.add_argument("--verbose", action="store_true", help="Debug output")
     parser.add_argument("--cache-path", metavar="PATH", type=Path, default=Path("cache"), help="Path to cache")
     parser.add_argument("--select", metavar="FEATURE", nargs="+", type=str, help="Features to include in output")
     parser.add_argument("--sort-values", action="store_true", help="Sort output by value instead of key")
-    parser.add_argument("--out", metavar="PATH", type=Path, help="If given write csv output to file")
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument("--out-csv", metavar="PATH", type=Path, help="If given write csv output to file")
+    group.add_argument("--out-parquet", metavar="PATH", type=Path, help="If given write parquet output to file")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--groupby",
@@ -183,17 +217,31 @@ Find all pictures taken by a Canon EOS camera using SQL query.
     pd.set_option("display.max_columns", None)
     pd.set_option("display.expand_frame_repr", False)
 
+    handler = RichHandler(log_time_format="%Y-%m-%d %H-%M-%S%Z")
+    FORMAT = "%(message)s"
+
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG, format=FORMAT, handlers=[handler])
     else:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[handler])
 
     if args.rebuild_cache:
-        df = pd.concat(map(cache(args.cache_path, duration=timedelta(0))(get_dataframe_by_path), args.paths))
+        c = cache(args.cache_path, duration=timedelta(0))
     else:
-        df = pd.concat(map(cache(args.cache_path)(get_dataframe_by_path), args.paths))
+        c = cache(args.cache_path)
+
+    if args.extensions:
+        df_func = partial(get_dataframe_by_path, extensions=args.extensions)
+    else:
+        df_func = partial(get_dataframe_by_path, extensions=supported_extensions)
+
+    df = pd.concat(map(c(df_func), args.paths))
 
     df = df[~df.index.duplicated(keep="first")]
+
+    if len(df) == 0:
+        print("No files found")
+        sys.exit(2)
 
     if args.groupby:
         if args.select:
@@ -226,8 +274,10 @@ Find all pictures taken by a Canon EOS camera using SQL query.
         """
         result = sqldf(args.sql, {"df": df})
 
-    if args.out:
-        result.to_csv(args.out, index=False)
+    if args.out_csv:
+        result.to_csv(args.out_csv, index=False)
+    elif args.out_parquet:
+        result.to_parquet(args.out_parquet, index=False)
     else:
         result.columns.name = None
         print(result)

@@ -309,6 +309,11 @@ def read_qt_image(
             )
             meta.update(get_exif_dates(exif))
 
+        if "depth_images" in img.info:
+            meta["depth_images"] = img.info["depth_images"]
+        else:
+            meta["depth_images"] = []
+
         if process:
             for func in process:
                 try:
@@ -772,7 +777,13 @@ def rotate_save(path: Path, target: str, format: Optional[str] = None) -> None:
         except KeyError:
             raise ValueError(f"Unsupported file extension: {path.suffix}") from None
 
-    outpath = path.with_suffix(f".rotated{path.suffix}")
+    if target in ("cw", "180", "ccw"):
+        outpath = path.with_suffix(f".rotated{path.suffix}")
+    elif target in ("hflip", "vflip"):
+        outpath = path.with_suffix(f".flipped{path.suffix}")
+    else:
+        raise ValueError(f"Unsupported target: {target}")
+
     if outpath.exists():
         raise FileExistsError(outpath)
 
@@ -787,6 +798,10 @@ def rotate_save(path: Path, target: str, format: Optional[str] = None) -> None:
             op = turbojpeg.OP.ROT180
         elif target == "ccw":
             op = turbojpeg.OP.ROT270
+        elif target == "hflip":
+            op = turbojpeg.OP.HFLIP
+        elif target == "vflip":
+            op = turbojpeg.OP.VFLIP
         else:
             raise ValueError(f"Unsupported target: {target}")
 
@@ -839,6 +854,10 @@ def rotate_save(path: Path, target: str, format: Optional[str] = None) -> None:
             elif target == "ccw":
                 op = Image.Transpose.ROTATE_90
                 dpi = (dpi[1], dpi[0])
+            elif target == "hflip":
+                op = Image.Transpose.FLIP_LEFT_RIGHT
+            elif target == "vflip":
+                op = Image.Transpose.FLIP_TOP_BOTTOM
             else:
                 raise ValueError(f"Unsupported target: {target}")
 
@@ -855,7 +874,13 @@ def rotate_save(path: Path, target: str, format: Optional[str] = None) -> None:
 def rotate_save_meta(path: Path, target: str) -> None:
     img = path.read_bytes()
 
-    outpath = path.with_suffix(f".rotated{path.suffix}")
+    if target in ("cw", "180", "ccw"):
+        outpath = path.with_suffix(f".rotated{path.suffix}")
+    elif target in ("hflip", "vflip"):
+        outpath = path.with_suffix(f".flipped{path.suffix}")
+    else:
+        raise ValueError(f"Unsupported target: {target}")
+
     if outpath.exists():
         raise FileExistsError(outpath)
 
@@ -886,6 +911,28 @@ def rotate_save_meta(path: Path, target: str) -> None:
             8: 3,
             3: 6,
             6: 1,
+        }
+    elif target == "hflip":
+        d = {
+            1: 2,
+            2: 1,
+            8: 5,
+            5: 8,
+            3: 4,
+            4: 3,
+            6: 7,
+            7: 6,
+        }
+    elif target == "vflip":
+        d = {
+            1: 4,
+            4: 1,
+            8: 7,
+            7: 8,
+            3: 2,
+            2: 3,
+            6: 5,
+            5: 6,
         }
     else:
         raise ValueError(f"Unsupported target: {target}")

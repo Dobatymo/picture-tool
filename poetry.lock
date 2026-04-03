@@ -2440,18 +2440,20 @@ dev = ["pytest", "pytest-cov", "pytest-pep8"]
 
 [[package]]
 name = "liccheck"
-version = "0.9.2"
+version = "0.9.3"
 description = "Check python packages from requirement.txt and report issues"
 optional = false
 python-versions = ">=3.5"
-files = [
-    {file = "liccheck-0.9.2-py2.py3-none-any.whl", hash = "sha256:15cbedd042515945fe9d58b62e0a5af2f2a7795def216f163bb35b3016a16637"},
-    {file = "liccheck-0.9.2.tar.gz", hash = "sha256:bdc2190f8e95af3c8f9c19edb784ba7d41ecb2bf9189422eae6112bf84c08cd5"},
-]
+files = []
+develop = true
 
 [package.dependencies]
-semantic-version = ">=2.7.0"
+semantic_version = ">=2.7.0"
 toml = "*"
+
+[package.source]
+type = "directory"
+url = "../../forks/python-license-check"
 
 [[package]]
 name = "lightning"
@@ -7515,4 +7517,4 @@ ml-tf = ["keras", "tensorflow"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8,<3.13"
-content-hash = "f556a68b85ba81d4fc04055c330023962b4944c11aa967bd9b2f2794b55e98b5"
+content-hash = "aefeabed4709756133725f30963997e1d2a730e2cbcf9134aa08d26604ec07e6"

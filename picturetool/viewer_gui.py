@@ -5,9 +5,11 @@ import webbrowser
 from collections import Counter, deque
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
+from enum import Enum
 from fractions import Fraction
 from functools import _CacheInfo, lru_cache, partial
 from multiprocessing.connection import Client, Listener
+from operator import itemgetter
 from pathlib import Path
 from queue import Full, Queue
 from threading import Lock, Thread
@@ -382,6 +384,11 @@ class BeepThread(Thread):
             return False
 
 
+class SortBy(Enum):
+    Name = 0
+    ModDate = 1
+
+
 class PictureWindow(QtWidgets.QMainWindow):
     rg: ReverseGeocode = None
 
@@ -406,6 +413,7 @@ class PictureWindow(QtWidgets.QMainWindow):
 
         self.last_action = "none"
         self.num_busy = 0
+        self.sort_by = SortBy.Name
 
         self.wm = wm
         self.resolve_city_names = resolve_city_names
@@ -460,6 +468,11 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.button_file_saveas.setStatusTip("Save copy of the file under a different name")
         self.button_file_saveas.setShortcut(QtGui.QKeySequence.SaveAs)
         self.button_file_saveas.triggered.connect(self.on_file_saveas)
+
+        self.button_view_depthmap = QtWidgets.QAction("View depth map", self)
+        self.button_view_depthmap.setStatusTip("Open the first depth map of the image")
+        self.button_view_depthmap.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_D))
+        self.button_view_depthmap.triggered.connect(self.on_view_depthmap)
 
         button_file_close = QtWidgets.QAction("Close window", self)
         button_file_close.setStatusTip("Close window")
@@ -543,17 +556,43 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_edit_rotate_ccw.setStatusTip("Losslessly rotate picture counter-clockwise (create new file)")
         button_edit_rotate_ccw.triggered.connect(self.on_edit_rotate_ccw)
 
+        button_edit_rotate_hflip = QtWidgets.QAction("&Flip horizontally (left-right)", self)
+        button_edit_rotate_hflip.setStatusTip("Losslessly flip picture horizontally (left-right) (create new file)")
+        button_edit_rotate_hflip.triggered.connect(self.on_edit_rotate_hflip)
+
+        button_edit_rotate_vflip = QtWidgets.QAction("&Flip vertically (top-bottom)", self)
+        button_edit_rotate_vflip.setStatusTip("Losslessly flip picture vertically (top-bottom) (create new file)")
+        button_edit_rotate_vflip.triggered.connect(self.on_edit_rotate_vflip)
+
         button_edit_rotate_cw_meta = QtWidgets.QAction("&Rotate clockwise (using metadata)", self)
         button_edit_rotate_cw_meta.setStatusTip(
             "Losslessly rotate picture clockwise by modifying metadata (create new file)"
         )
         button_edit_rotate_cw_meta.triggered.connect(self.on_edit_rotate_cw_meta)
 
+        button_edit_rotate_180_meta = QtWidgets.QAction("&Rotate 180 degrees (using metadata)", self)
+        button_edit_rotate_180_meta.setStatusTip(
+            "Losslessly rotate picture 180 degrees by modifying metadata (create new file)"
+        )
+        button_edit_rotate_180_meta.triggered.connect(self.on_edit_rotate_180_meta)
+
         button_edit_rotate_ccw_meta = QtWidgets.QAction("&Rotate counter-clockwise (using metadata)", self)
         button_edit_rotate_ccw_meta.setStatusTip(
             "Losslessly rotate picture counter-clockwise by modifying metadata (create new file)"
         )
         button_edit_rotate_ccw_meta.triggered.connect(self.on_edit_rotate_ccw_meta)
+
+        button_edit_rotate_hflip_meta = QtWidgets.QAction("&Flip horizontally (left-right) (using metadata)", self)
+        button_edit_rotate_hflip_meta.setStatusTip(
+            "Losslessly flip picture horizontally (left-right) by modifying metadata (create new file)"
+        )
+        button_edit_rotate_hflip_meta.triggered.connect(self.on_edit_rotate_hflip_meta)
+
+        button_edit_rotate_vflip_meta = QtWidgets.QAction("&Flip vertically (top-bottom) (using metadata)", self)
+        button_edit_rotate_vflip_meta.setStatusTip(
+            "Losslessly flip picture vertically (top-bottom) by modifying metadata (create new file)"
+        )
+        button_edit_rotate_vflip_meta.triggered.connect(self.on_edit_rotate_vflip_meta)
 
         self.menu = self.menuBar()
         file_menu = self.menu.addMenu("&File")
@@ -564,12 +603,26 @@ class PictureWindow(QtWidgets.QMainWindow):
         file_menu.addAction(button_file_close)
         file_menu.addAction(button_file_quit)
 
+        sort_group = QtWidgets.QActionGroup(self)
+
+        button_sort_name = QtWidgets.QAction("&Name", sort_group)
+        button_sort_name.setCheckable(True)
+        button_sort_name.setChecked(True)
+        button_sort_name.triggered[bool].connect(self.on_sort_name)
+        button_sort_mod_date = QtWidgets.QAction("&Modification date", sort_group)
+        button_sort_mod_date.setCheckable(True)
+        button_sort_mod_date.triggered[bool].connect(self.on_sort_mod_date)
+
         view_menu = self.menu.addMenu("&View")
         view_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
         view_menu.addAction(self.button_fit_to_window)
         view_menu.addAction(button_view_rotate_cw)
         view_menu.addAction(button_view_rotate_ccw)
         view_menu.addAction(button_view_fullscreen)
+        sort_menu = view_menu.addMenu("&Sort")
+        sort_menu.addAction(button_sort_name)
+        sort_menu.addAction(button_sort_mod_date)
+        view_menu.addAction(self.button_view_depthmap)
 
         filters_menu = self.menu.addMenu("&Filters")
         filters_menu.menuAction().setStatusTip("Actions here only affect the view, they don't modify the image file")
@@ -582,11 +635,18 @@ class PictureWindow(QtWidgets.QMainWindow):
         edit_menu.menuAction().setStatusTip("Actions here save an edited version of the file to disk")
         edit_menu.addAction(button_crop_bottom)
         edit_menu.addAction(button_crop_top)
+        edit_menu.addSeparator()
         edit_menu.addAction(button_edit_rotate_cw)
         edit_menu.addAction(button_edit_rotate_180)
         edit_menu.addAction(button_edit_rotate_ccw)
+        edit_menu.addAction(button_edit_rotate_hflip)
+        edit_menu.addAction(button_edit_rotate_vflip)
+        edit_menu.addSeparator()
         edit_menu.addAction(button_edit_rotate_cw_meta)
+        edit_menu.addAction(button_edit_rotate_180_meta)
         edit_menu.addAction(button_edit_rotate_ccw_meta)
+        edit_menu.addAction(button_edit_rotate_hflip_meta)
+        edit_menu.addAction(button_edit_rotate_vflip_meta)
 
         action_undo = QtWidgets.QAction("&Undo", self)
         action_undo.setShortcut(QtGui.QKeySequence.Undo)
@@ -722,15 +782,23 @@ class PictureWindow(QtWidgets.QMainWindow):
 
     def _get_pic_paths(self, path: Path) -> List[Path]:
         with MeasureTime() as stopwatch:
-            paths = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() in self.extensions]
+            paths = [
+                (p, p.stat().st_mtime_ns) for p in path.iterdir() if p.is_file() and p.suffix.lower() in self.extensions
+            ]
             time_delta_1 = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
         with MeasureTime() as stopwatch:
-            out = os_sorted(paths)
+            if self.sort_by == SortBy.Name:
+                out = os_sorted(paths, key=itemgetter(0))
+            elif self.sort_by == SortBy.ModDate:
+                out = sorted(paths, key=itemgetter(1))
+            else:
+                assert False
+
             time_delta_2 = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
         logger.debug(
             "Found %d pictures in <%s>. Reading took %s, sorting %s", len(paths), path, time_delta_1, time_delta_2
         )
-        return out
+        return list(map(itemgetter(0), out))
 
     def try_preload(self, idx: int) -> None:
         if idx >= 0 and idx < len(self.paths):
@@ -942,6 +1010,8 @@ class PictureWindow(QtWidgets.QMainWindow):
                     time_delta = humanize.precisedelta(timedelta(seconds=stopwatch.get()))
                 logger.debug("Resolving GPS coordinates took %s", time_delta)
 
+        meta["num-depth-maps"] = len(meta["depth_images"])
+
         vals = {
             "FL (mm)": "focal-length",
             "F": "f-number",
@@ -949,9 +1019,10 @@ class PictureWindow(QtWidgets.QMainWindow):
             "ISO": "iso",
             "A": "aperture-value",
             "City": "city",
+            "Depth maps": "num-depth-maps",
         }
 
-        return ", ".join(f"{k}: {nice_meta(meta[v])}" for k, v in vals.items() if meta.get(v))
+        return ", ".join(f"{k}: {nice_meta(meta[v])}" for k, v in vals.items() if meta.get(v) is not None)
 
     def handle_user_event(self, key: QtCore.Qt.Key) -> None:
         func, args = self.user_events[key]
@@ -980,6 +1051,20 @@ class PictureWindow(QtWidgets.QMainWindow):
 
             if date_changed:
                 func(*args)
+
+    @QtCore.Slot(bool)
+    def on_sort_name(self, checked: bool) -> None:
+        assert checked
+        if self.sort_by != SortBy.Name:
+            self.sort_by = SortBy.Name
+            self.refresh_folder()
+
+    @QtCore.Slot(bool)
+    def on_sort_mod_date(self, checked: bool) -> None:
+        assert checked
+        if self.sort_by != SortBy.ModDate:
+            self.sort_by = SortBy.ModDate
+            self.refresh_folder()
 
     @QtCore.Slot(Path, QImageWithBuffer)
     def on_pic_loaded(self, path: Path, frame: int, image: QImageWithBuffer) -> None:
@@ -1013,6 +1098,11 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.statusbar_c2pa.setStyleSheet("QLabel { color : red; }")
         else:
             self.statusbar_c2pa.setText(None)
+
+        if image.meta["depth_images"]:
+            self.button_view_depthmap.setEnabled(True)
+        else:
+            self.button_view_depthmap.setEnabled(False)
 
         self.button_file_saveas.setEnabled(True)
 
@@ -1189,6 +1279,18 @@ class PictureWindow(QtWidgets.QMainWindow):
             self.statusbar.show()
             # self.menu.show()
 
+    @QtCore.Slot()
+    def on_view_depthmap(self) -> None:
+        pm = self.viewer.label.pm
+        if pm is not None:
+            if pm.meta["depth_images"]:
+                print(pm.meta["depth_images"][0].info)
+                print(pm.meta["depth_images"][0].mode)
+                pm.meta["depth_images"][0].to_pillow().show()
+            else:
+                # alert no depth map
+                pass
+
     @QtCore.Slot(bool)
     def on_filter_grayscale(self, checked: bool) -> None:
         if checked:
@@ -1328,7 +1430,9 @@ class PictureWindow(QtWidgets.QMainWindow):
                 rotate_save(path, target, format)
             except (ImperfectTransform, FileExistsError, ValueError) as e:
                 QtWidgets.QMessageBox.warning(
-                    self, "Rotating picture failed", f"Rotating <{path}> failed. {type(e).__name__}: {e}"
+                    self,
+                    "Rotating/flipping picture failed",
+                    f"Rotating/flipping <{path}> failed. {type(e).__name__}: {e}",
                 )
 
     @QtCore.Slot()
@@ -1342,6 +1446,14 @@ class PictureWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def on_edit_rotate_ccw(self) -> None:
         self._on_edit_rotate("ccw")
+
+    @QtCore.Slot()
+    def on_edit_rotate_hflip(self) -> None:
+        self._on_edit_rotate("hflip")
+
+    @QtCore.Slot()
+    def on_edit_rotate_vflip(self) -> None:
+        self._on_edit_rotate("vflip")
 
     def _on_edit_rotate_meta(self, target: str) -> None:
         assert self.loaded is not None
@@ -1367,8 +1479,20 @@ class PictureWindow(QtWidgets.QMainWindow):
         self._on_edit_rotate_meta("cw")
 
     @QtCore.Slot()
+    def on_edit_rotate_180_meta(self) -> None:
+        self._on_edit_rotate_meta("180")
+
+    @QtCore.Slot()
     def on_edit_rotate_ccw_meta(self) -> None:
         self._on_edit_rotate_meta("ccw")
+
+    @QtCore.Slot()
+    def on_edit_rotate_hflip_meta(self) -> None:
+        self._on_edit_rotate_meta("hflip")
+
+    @QtCore.Slot()
+    def on_edit_rotate_vflip_meta(self) -> None:
+        self._on_edit_rotate_meta("vflip")
 
     @QtCore.Slot(bool)
     def on_fit_to_window(self, checked: bool) -> None:
