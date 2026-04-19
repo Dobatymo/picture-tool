@@ -28,9 +28,9 @@ except ImportError:
     from PySide2.QtWidgets import QAction
 
 try:
-    import c2pa
+    import c2pa  # noqa: F401
 
-    from .c2pa_utils import c2pa_json
+    from .c2pa_utils import C2paError, c2pa_json
 
     has_c2pa = True
 except ModuleNotFoundError as e:
@@ -222,9 +222,15 @@ def read_qt_image(
 
     if has_c2pa:
         try:
-            valid = not bool(c2pa_json(_path).get("validation_status", []))
-            meta["c2pa"] = valid
-        except c2pa.Error.ManifestNotFound:
+            validation_state = c2pa_json(_path)["validation_state"]
+            if validation_state == "Valid":
+                meta["c2pa"] = True
+            elif validation_state == "Invalid":
+                meta["c2pa"] = False
+            else:
+                logger.warning("Invalid c2pa validation state: %s", validation_state)
+                meta["c2pa"] = None
+        except C2paError.ManifestNotFound:
             meta["c2pa"] = None
     else:
         meta["c2pa"] = None
