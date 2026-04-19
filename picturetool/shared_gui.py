@@ -28,7 +28,7 @@ except ImportError:
     from PySide2.QtWidgets import QAction
 
 try:
-    from c2pa.c2pa import c2pa
+    import c2pa
 
     from .c2pa_utils import c2pa_json
 

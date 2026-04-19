@@ -67,7 +67,10 @@ def main():
     # and thus speed up the file open process.
     import json
 
-    from PySide2 import QtCore, QtWidgets
+    try:
+        from PySide6 import QtCore, QtWidgets
+    except ImportError:
+        from PySide2 import QtCore, QtWidgets
 
     from picturetool.viewer_gui import PictureWindow, PyServer, WindowManager
 

@@ -14,7 +14,11 @@ import numpy as np
 import pandas as pd
 from genutility._files import to_dos_path
 from genutility.time import MeasureTime
-from PySide2 import QtCore, QtGui, QtWidgets
+
+try:
+    from PySide6 import QtCore, QtGui, QtWidgets
+except ImportError:
+    from PySide2 import QtCore, QtGui, QtWidgets
 
 from .prioritize import functions
 from .shared_gui import PixmapViewer, read_qt_pixmap

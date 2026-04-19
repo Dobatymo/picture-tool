@@ -22,8 +22,15 @@ from genutility.time import MeasureTime
 from houtu import ReverseGeocode
 from natsort import os_sorted
 from PIL import ImageOps
-from PySide2 import QtCore, QtGui, QtWidgets
 from typing_extensions import Concatenate
+
+try:
+    from PySide6 import QtCore, QtGui, QtWidgets
+    from PySide6.QtGui import QAction, QActionGroup
+except ImportError:
+    from PySide2 import QtCore, QtGui, QtWidgets
+    from PySide2.QtWidgets import QAction, QActionGroup
+
 
 from .shared_gui import (
     ImageTransformT,
@@ -301,15 +308,15 @@ class WindowManager(Generic[T]):
         icon = QtWidgets.QFileIconProvider().icon(QtWidgets.QFileIconProvider.Computer)
         menu = QtWidgets.QMenu()
 
-        action_open = QtWidgets.QAction("Open new window", menu)
+        action_open = QAction("Open new window", menu)
         action_open.triggered.connect(self.create)
 
-        action_about = QtWidgets.QAction("About", menu)
-        action_about.setMenuRole(QtWidgets.QAction.AboutRole)
+        action_about = QAction("About", menu)
+        action_about.setMenuRole(QAction.AboutRole)
         action_about.triggered.connect(self.about)
 
-        action_quit = QtWidgets.QAction("Close app", menu)
-        action_quit.setMenuRole(QtWidgets.QAction.QuitRole)
+        action_quit = QAction("Close app", menu)
+        action_quit.setMenuRole(QAction.QuitRole)
         action_quit.triggered.connect(app.quit)
 
         menu.addAction(action_open)
@@ -454,81 +461,81 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.statusbar.addWidget(self.statusbar_transforms)
         self.setStatusBar(self.statusbar)
 
-        button_file_open = QtWidgets.QAction("&Open", self)
+        button_file_open = QAction("&Open", self)
         button_file_open.setStatusTip("Open file(s)")
         button_file_open.setShortcut(QtGui.QKeySequence.Open)
         button_file_open.triggered.connect(self.on_file_open)
 
-        button_file_rename = QtWidgets.QAction("Rename", self)
+        button_file_rename = QAction("Rename", self)
         button_file_rename.setStatusTip("Rename current file")
         button_file_rename.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key_F2))
         button_file_rename.triggered.connect(self.on_file_rename)
 
-        self.button_file_saveas = QtWidgets.QAction("Save as", self)
+        self.button_file_saveas = QAction("Save as", self)
         self.button_file_saveas.setStatusTip("Save copy of the file under a different name")
         self.button_file_saveas.setShortcut(QtGui.QKeySequence.SaveAs)
         self.button_file_saveas.triggered.connect(self.on_file_saveas)
 
-        self.button_view_depthmap = QtWidgets.QAction("View depth map", self)
+        self.button_view_depthmap = QAction("View depth map", self)
         self.button_view_depthmap.setStatusTip("Open the first depth map of the image")
         self.button_view_depthmap.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_D))
         self.button_view_depthmap.triggered.connect(self.on_view_depthmap)
 
-        button_file_close = QtWidgets.QAction("Close window", self)
+        button_file_close = QAction("Close window", self)
         button_file_close.setStatusTip("Close window")
         button_file_close.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape))
         button_file_close.triggered.connect(self.close)
 
-        button_file_quit = QtWidgets.QAction("Close app", self)
+        button_file_quit = QAction("Close app", self)
         button_file_quit.setStatusTip("Close app")
-        button_file_quit.setMenuRole(QtWidgets.QAction.QuitRole)
+        button_file_quit.setMenuRole(QAction.QuitRole)
         button_file_quit.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Q))
         button_file_quit.triggered.connect(QtCore.QCoreApplication.instance().quit)
 
-        self.button_fit_to_window = QtWidgets.QAction("Fit to window", self)
+        self.button_fit_to_window = QAction("Fit to window", self)
         self.button_fit_to_window.setCheckable(True)
         self.button_fit_to_window.setChecked(True)
         self.button_fit_to_window.setStatusTip("Resize picture to fit to window")
         self.button_fit_to_window.setShortcut(QtGui.QKeySequence(QtCore.Qt.SHIFT | QtCore.Qt.Key_F))
         self.button_fit_to_window.triggered[bool].connect(self.on_fit_to_window)
 
-        button_view_rotate_cw = QtWidgets.QAction("Rotate clockwise", self)
+        button_view_rotate_cw = QAction("Rotate clockwise", self)
         button_view_rotate_cw.setStatusTip("Rotate picture clockwise (view only)")
         button_view_rotate_cw.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Period))
         button_view_rotate_cw.triggered.connect(self.on_view_rotate_cw)
 
-        button_view_rotate_ccw = QtWidgets.QAction("Rotate counter-clockwise", self)
+        button_view_rotate_ccw = QAction("Rotate counter-clockwise", self)
         button_view_rotate_ccw.setStatusTip("Rotate picture counter-clockwise (view only)")
         button_view_rotate_ccw.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Comma))
         button_view_rotate_ccw.triggered.connect(self.on_view_rotate_ccw)
 
-        button_view_fullscreen = QtWidgets.QAction("Fullscreen", self)
+        button_view_fullscreen = QAction("Fullscreen", self)
         button_view_fullscreen.setCheckable(True)
         button_view_fullscreen.setChecked(False)
         button_view_fullscreen.setStatusTip("Show picture in fullscreen mode")
         button_view_fullscreen.setShortcut(QtGui.QKeySequence.FullScreen)
         button_view_fullscreen.triggered[bool].connect(self.on_view_fullscreen)
 
-        button_auto_rotate = QtWidgets.QAction("&Auto-rotate", self)
+        button_auto_rotate = QAction("&Auto-rotate", self)
         button_auto_rotate.setCheckable(True)
         button_auto_rotate.setChecked(True)
         button_auto_rotate.setStatusTip("Rotate image automatically based on metadata")
         button_auto_rotate.triggered[bool].connect(self.on_filter_auto_rotate)
 
-        button_grayscale = QtWidgets.QAction("&Grayscale", self)
+        button_grayscale = QAction("&Grayscale", self)
         button_grayscale.setCheckable(True)
         button_grayscale.setStatusTip("Convert to grayscale")
         button_grayscale.setShortcut(QtGui.QKeySequence(QtCore.Qt.SHIFT | QtCore.Qt.Key_G))
         button_grayscale.triggered[bool].connect(self.on_filter_grayscale)
 
-        button_autocontrast = QtWidgets.QAction("&Maximize (normalize) image contrast", self)
+        button_autocontrast = QAction("&Maximize (normalize) image contrast", self)
         button_autocontrast.setCheckable(True)
         button_autocontrast.setStatusTip(
             "This function calculates a histogram of the input image (or mask region), removes cutoff percent of the lightest and darkest pixels from the histogram, and remaps the image so that the darkest pixel becomes black (0), and the lightest becomes white (255)."
         )
         button_autocontrast.triggered[bool].connect(self.on_filter_autocontrast)
 
-        button_equalize = QtWidgets.QAction("&Histogram equalization", self)
+        button_equalize = QAction("&Histogram equalization", self)
         button_equalize.setCheckable(True)
         button_equalize.setStatusTip(
             "This function applies a non-linear mapping to the input image, in order to create a uniform distribution of grayscale values in the output image."
@@ -536,59 +543,59 @@ class PictureWindow(QtWidgets.QMainWindow):
         button_equalize.triggered[bool].connect(self.on_filter_equalize)
         button_equalize.setShortcut(QtGui.QKeySequence(QtCore.Qt.SHIFT | QtCore.Qt.Key_H))
 
-        button_crop_bottom = QtWidgets.QAction("&Crop bottom half", self)
+        button_crop_bottom = QAction("&Crop bottom half", self)
         button_crop_bottom.setStatusTip("Losslessly crop away the bottom half of the image (create new file)")
         button_crop_bottom.triggered[bool].connect(self.on_crop_bottom)
 
-        button_crop_top = QtWidgets.QAction("&Crop top half", self)
+        button_crop_top = QAction("&Crop top half", self)
         button_crop_top.setStatusTip("Losslessly crop away the top half of the image (create new file)")
         button_crop_top.triggered[bool].connect(self.on_crop_top)
 
-        button_edit_rotate_cw = QtWidgets.QAction("&Rotate clockwise", self)
+        button_edit_rotate_cw = QAction("&Rotate clockwise", self)
         button_edit_rotate_cw.setStatusTip("Losslessly rotate picture clockwise (create new file)")
         button_edit_rotate_cw.triggered.connect(self.on_edit_rotate_cw)
 
-        button_edit_rotate_180 = QtWidgets.QAction("&Rotate 180 degrees", self)
+        button_edit_rotate_180 = QAction("&Rotate 180 degrees", self)
         button_edit_rotate_180.setStatusTip("Losslessly rotate picture 180 degrees (create new file)")
         button_edit_rotate_180.triggered.connect(self.on_edit_rotate_180)
 
-        button_edit_rotate_ccw = QtWidgets.QAction("&Rotate counter-clockwise", self)
+        button_edit_rotate_ccw = QAction("&Rotate counter-clockwise", self)
         button_edit_rotate_ccw.setStatusTip("Losslessly rotate picture counter-clockwise (create new file)")
         button_edit_rotate_ccw.triggered.connect(self.on_edit_rotate_ccw)
 
-        button_edit_rotate_hflip = QtWidgets.QAction("&Flip horizontally (left-right)", self)
+        button_edit_rotate_hflip = QAction("&Flip horizontally (left-right)", self)
         button_edit_rotate_hflip.setStatusTip("Losslessly flip picture horizontally (left-right) (create new file)")
         button_edit_rotate_hflip.triggered.connect(self.on_edit_rotate_hflip)
 
-        button_edit_rotate_vflip = QtWidgets.QAction("&Flip vertically (top-bottom)", self)
+        button_edit_rotate_vflip = QAction("&Flip vertically (top-bottom)", self)
         button_edit_rotate_vflip.setStatusTip("Losslessly flip picture vertically (top-bottom) (create new file)")
         button_edit_rotate_vflip.triggered.connect(self.on_edit_rotate_vflip)
 
-        button_edit_rotate_cw_meta = QtWidgets.QAction("&Rotate clockwise (using metadata)", self)
+        button_edit_rotate_cw_meta = QAction("&Rotate clockwise (using metadata)", self)
         button_edit_rotate_cw_meta.setStatusTip(
             "Losslessly rotate picture clockwise by modifying metadata (create new file)"
         )
         button_edit_rotate_cw_meta.triggered.connect(self.on_edit_rotate_cw_meta)
 
-        button_edit_rotate_180_meta = QtWidgets.QAction("&Rotate 180 degrees (using metadata)", self)
+        button_edit_rotate_180_meta = QAction("&Rotate 180 degrees (using metadata)", self)
         button_edit_rotate_180_meta.setStatusTip(
             "Losslessly rotate picture 180 degrees by modifying metadata (create new file)"
         )
         button_edit_rotate_180_meta.triggered.connect(self.on_edit_rotate_180_meta)
 
-        button_edit_rotate_ccw_meta = QtWidgets.QAction("&Rotate counter-clockwise (using metadata)", self)
+        button_edit_rotate_ccw_meta = QAction("&Rotate counter-clockwise (using metadata)", self)
         button_edit_rotate_ccw_meta.setStatusTip(
             "Losslessly rotate picture counter-clockwise by modifying metadata (create new file)"
         )
         button_edit_rotate_ccw_meta.triggered.connect(self.on_edit_rotate_ccw_meta)
 
-        button_edit_rotate_hflip_meta = QtWidgets.QAction("&Flip horizontally (left-right) (using metadata)", self)
+        button_edit_rotate_hflip_meta = QAction("&Flip horizontally (left-right) (using metadata)", self)
         button_edit_rotate_hflip_meta.setStatusTip(
             "Losslessly flip picture horizontally (left-right) by modifying metadata (create new file)"
         )
         button_edit_rotate_hflip_meta.triggered.connect(self.on_edit_rotate_hflip_meta)
 
-        button_edit_rotate_vflip_meta = QtWidgets.QAction("&Flip vertically (top-bottom) (using metadata)", self)
+        button_edit_rotate_vflip_meta = QAction("&Flip vertically (top-bottom) (using metadata)", self)
         button_edit_rotate_vflip_meta.setStatusTip(
             "Losslessly flip picture vertically (top-bottom) by modifying metadata (create new file)"
         )
@@ -603,13 +610,13 @@ class PictureWindow(QtWidgets.QMainWindow):
         file_menu.addAction(button_file_close)
         file_menu.addAction(button_file_quit)
 
-        sort_group = QtWidgets.QActionGroup(self)
+        sort_group = QActionGroup(self)
 
-        button_sort_name = QtWidgets.QAction("&Name", sort_group)
+        button_sort_name = QAction("&Name", sort_group)
         button_sort_name.setCheckable(True)
         button_sort_name.setChecked(True)
         button_sort_name.triggered[bool].connect(self.on_sort_name)
-        button_sort_mod_date = QtWidgets.QAction("&Modification date", sort_group)
+        button_sort_mod_date = QAction("&Modification date", sort_group)
         button_sort_mod_date.setCheckable(True)
         button_sort_mod_date.triggered[bool].connect(self.on_sort_mod_date)
 
@@ -648,7 +655,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(button_edit_rotate_hflip_meta)
         edit_menu.addAction(button_edit_rotate_vflip_meta)
 
-        action_undo = QtWidgets.QAction("&Undo", self)
+        action_undo = QAction("&Undo", self)
         action_undo.setShortcut(QtGui.QKeySequence.Undo)
         action_undo.triggered[bool].connect(self.on_undo)
 
@@ -656,11 +663,11 @@ class PictureWindow(QtWidgets.QMainWindow):
         actions_menu.menuAction().setStatusTip("Global actions")
         actions_menu.addAction(action_undo)
 
-        action_explorer = QtWidgets.QAction("&Explorer", self)
+        action_explorer = QAction("&Explorer", self)
         action_explorer.triggered[bool].connect(self.on_explorer)
         action_explorer.setStatusTip("Open Windows Explorer")
 
-        self.action_google_maps = QtWidgets.QAction("&Google Maps", self)
+        self.action_google_maps = QAction("&Google Maps", self)
         self.action_google_maps.triggered[bool].connect(self.on_google_maps)
         self.action_google_maps.setStatusTip("Open Google Maps at GPS location")
 
@@ -669,12 +676,12 @@ class PictureWindow(QtWidgets.QMainWindow):
         open_menu.addAction(action_explorer)
         open_menu.addAction(self.action_google_maps)
 
-        self.multi_next = QtWidgets.QAction("&Next", self)
+        self.multi_next = QAction("&Next", self)
         self.multi_next.triggered[bool].connect(self.on_multi_next)
         self.multi_next.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Right))
         self.multi_next.setStatusTip("Next frame")
 
-        self.multi_prev = QtWidgets.QAction("&Previous", self)
+        self.multi_prev = QAction("&Previous", self)
         self.multi_prev.triggered[bool].connect(self.on_multi_prev)
         self.multi_prev.setShortcut(QtGui.QKeySequence(QtCore.Qt.CTRL | QtCore.Qt.Key_Left))
         self.multi_prev.setStatusTip("Previous frame")

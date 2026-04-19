@@ -5,7 +5,11 @@ import sys
 from argparse import ArgumentParser
 
 from genutility.args import is_file
-from PySide2 import QtWidgets
+
+try:
+    from PySide6 import QtWidgets
+except ImportError:
+    from PySide2 import QtWidgets
 
 from picturetool.compare_gui import TableWindow
 
