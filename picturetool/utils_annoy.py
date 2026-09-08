@@ -6,9 +6,7 @@ from genutility.callbacks import Progress
 
 
 def annoy_from_array(arr: np.ndarray, norm: str, n_trees: int = 100) -> AnnoyIndex:
-    if norm == "euclidean":
-        index = AnnoyIndex(arr.shape[1], norm)
-    elif norm == "hamming":
+    if norm == "euclidean" or norm == "hamming":
         index = AnnoyIndex(arr.shape[1], norm)
     else:
         raise ValueError(f"Invalid norm: {norm}")
@@ -24,6 +22,6 @@ def annoy_duplicates_topk(index: AnnoyIndex, topk: int, progress: Optional[Progr
     out = []
     progress = progress or Progress()
     for i in progress.track(range(index.get_n_items())):
-        items, distances = index.get_nns_by_item(i, topk, include_distances=True)
+        items, _distances = index.get_nns_by_item(i, topk, include_distances=True)
         out.append(items)
     return np.array(out)

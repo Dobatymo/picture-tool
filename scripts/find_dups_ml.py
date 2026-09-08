@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import transformers
 from concurrex.thread import ThreadedIterator
-from genutility.args import is_dir
+from genutility.args import is_dir, positive_int
 from genutility.file import StdoutFile
 from genutility.filesystem import scandir_ext
 from genutility.iter import batch
@@ -92,7 +92,7 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("path", type=is_dir)
     parser.add_argument("--vision-transformer-model", default=DEFAULT_VIT_MODEL)
-    parser.add_argument("--batchsize", type=int, default=100)
+    parser.add_argument("--batchsize", type=positive_int, default=100)
     parser.add_argument(
         "--out",
         metavar="PATH",

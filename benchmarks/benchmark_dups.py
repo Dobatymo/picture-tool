@@ -1,5 +1,5 @@
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -162,7 +162,7 @@ def main(
     else:
         np_arr = rng.uniform(0, 1, size=dims).astype(np.float32)
 
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).astimezone().isoformat()
     prefix = f"{now} [{cpu_name}] {engine} {task} dims={dims} chunksize={chunksize} limit={limit}"
 
     try:
@@ -202,16 +202,18 @@ def main(
 if __name__ == "__main__":
     from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
+    from genutility.args import non_negative_int, positive_int
+
     CHUNKSIZE = 1000
 
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "--engine", choices=("python", "numba", "numpy", "npmt", "npmp", "dask", "faiss", "annoy"), required=True
     )
-    parser.add_argument("--dims", type=int, nargs=2, required=True)
-    parser.add_argument("--chunksize", type=int, default=CHUNKSIZE)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--threadpool-limit", type=int, default=None)
+    parser.add_argument("--dims", type=positive_int, nargs=2, required=True)
+    parser.add_argument("--chunksize", type=positive_int, default=CHUNKSIZE)
+    parser.add_argument("--seed", type=non_negative_int, default=None)
+    parser.add_argument("--threadpool-limit", type=positive_int, default=None)
     parser.add_argument("--task", choices=("l2-dups", "binary-dups", "matmul"))
     parser.add_argument(
         "--out",

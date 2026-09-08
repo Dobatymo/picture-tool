@@ -283,7 +283,7 @@ def read_qt_image(
 
         img.load()  # necessary for PNG exif data to be loaded if available
 
-        if "exif" in img.info:
+        if img.info.get("exif"):
             exif = piexif.load(img.info["exif"])
             exif_gamma = exif["Exif"].get(piexif.ExifIFD.Gamma, None)
             if exif_gamma is not None:
@@ -471,7 +471,7 @@ class AspectRatioPixmapLabel(QtWidgets.QLabel):
 class PixmapViewer(QtWidgets.QScrollArea):
     scale_changed = QtCore.Signal(float)
 
-    arrow_keys = [QtCore.Qt.Key_Left, QtCore.Qt.Key_Right, QtCore.Qt.Key_Up, QtCore.Qt.Key_Down]
+    arrow_keys = (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right, QtCore.Qt.Key_Up, QtCore.Qt.Key_Down)
 
     label: AspectRatioPixmapLabel
     fit_to_window: bool
@@ -649,9 +649,12 @@ class TranslateTjException:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if isinstance(exc_value, RuntimeError):
-            if exc_value.args[0] == "tj3Transform(): Transform is not perfect":
-                raise ImperfectTransform("Perfectly lossless rotation not possible")
+        if (
+            isinstance(exc_value, RuntimeError)
+            and exc_value.args
+            and exc_value.args[0] == "tj3Transform(): Transform is not perfect"
+        ):
+            raise ImperfectTransform("Perfectly lossless rotation not possible") from exc_value
 
 
 def _tj_fix_orientation(img: bytes, orientation: int, perfect: bool = True) -> bytes:

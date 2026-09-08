@@ -5,7 +5,7 @@ from genutility.test import MyTestCase
 try:
     from picturetool.c2pa_utils import C2paError, c2pa_json
 except ModuleNotFoundError:
-    raise SkipTest("Skipping c2pa tests since c2pa-python is not available")
+    raise SkipTest("Skipping c2pa tests since c2pa-python is not available") from None
 
 
 class TestC2pa(MyTestCase):

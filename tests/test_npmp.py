@@ -79,14 +79,14 @@ class SharedNdarrayTest(MyTestCase):
     def test_pickle(self, arr):
         # c-contiguous
         sharr1 = SharedNdarray.from_array(arr, True)
-        sharr2 = pickle.loads(pickle.dumps(sharr1))  # nosec
+        sharr2 = pickle.loads(pickle.dumps(sharr1))  # noqa: S301
 
         self.assertEqual(sharr1.tobytes(), sharr2.tobytes())
         np.testing.assert_array_equal(sharr1.getarray(), sharr2.getarray())
 
         # non-contiguous
         sharr1 = SharedNdarray.from_array(arr, False)
-        sharr2 = pickle.loads(pickle.dumps(sharr1))  # nosec
+        sharr2 = pickle.loads(pickle.dumps(sharr1))  # noqa: S301
 
         self.assertEqual(sharr1.tobytes(), sharr2.tobytes())
         np.testing.assert_array_equal(sharr1.getarray(), sharr2.getarray())

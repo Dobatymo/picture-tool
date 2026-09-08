@@ -26,12 +26,12 @@ class TestMlUtils(MyTestCase):
         index = faiss_from_array(arr, "l2-squared")
 
         truth = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
-        pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, 1000, 2.1))
+        pairs, _dists = faiss_to_pairs(faiss_duplicates_threshold(index, 1000, 2.1))
         result = np_sorted(pairs)
         np.testing.assert_array_equal(result, truth)
 
         truth = np.array([[0, 1], [0, 2], [1, 3], [2, 3]])
-        pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, 1000, 1.1))
+        pairs, _dists = faiss_to_pairs(faiss_duplicates_threshold(index, 1000, 1.1))
         result = np_sorted(pairs)
         np.testing.assert_array_equal(result, truth)
 
@@ -46,7 +46,7 @@ class TestMlUtils(MyTestCase):
     )
     def test_faiss_duplicates_threshold_random(self, d, chunksize):
         index = faiss_from_array(self.arr[:d, :], "l2-squared")
-        pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, 1.1))
+        pairs, _dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, 1.1))
         result = np_sorted(pairs)
         np.testing.assert_array_equal(result, self.truths_3d[d])
 

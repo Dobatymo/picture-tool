@@ -13,7 +13,7 @@ import piq
 import pyiqa
 import skvideo.measure
 from concurrex.thread import ThreadedIterator
-from genutility.args import is_dir
+from genutility.args import is_dir, non_negative_int
 from genutility.filesystem import scandir_ext
 from genutility.rich import Progress
 from imquality import brisque
@@ -42,10 +42,9 @@ class LogException:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is not None:
-            if isinstance(exc_value, Exception):
-                logging.exception(self.s, *self.args)  # , exc_info=
-                return True
+        if exc_type is not None and isinstance(exc_value, Exception):
+            logging.exception(self.s, *self.args)  # , exc_info=
+            return True
 
 
 def np_total_variation(x: np.ndarray, norm_type: str = "l2") -> np.ndarray:
@@ -135,7 +134,7 @@ def main():
     parser.add_argument("path", type=is_dir, help="Input directory")
     parser.add_argument("--extensions", nargs="+", default=extensions_images)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=non_negative_int, default=None)
     parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -148,7 +147,8 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[handler])
 
-    with AutoThreadedIterator(scandir_ext(args.path, args.extensions, rec=args.recursive), maxsize=0) as it:
+    # Keep contexts nested for readable wrapping on Python 3.8 (no parenthesized context managers).
+    with AutoThreadedIterator(scandir_ext(args.path, args.extensions, rec=args.recursive), maxsize=0) as it:  # noqa: SIM117
         with open(args.out, "w", encoding="utf-8", newline="") as csvfile, RichProgress() as progress:
             p = Progress(progress)
             fieldnames = [

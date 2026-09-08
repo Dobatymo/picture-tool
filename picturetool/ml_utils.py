@@ -154,12 +154,12 @@ def faiss_to_pairs(it: Iterable[Tuple[int, int, float]]) -> Tuple[np.ndarray, np
 def faiss_duplicates_threshold_pairs(
     metric: str,
     arr: Union[np.ndarray, Iterable[np.ndarray]],
-    threshold: Union[int, float],
+    threshold: float,
     chunksize: int,
     progress: Progress,
 ) -> np.ndarray:
     index = faiss_from_array(arr, metric)
-    pairs, dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, threshold, progress))
+    pairs, _dists = faiss_to_pairs(faiss_duplicates_threshold(index, chunksize, threshold, progress))
     return pairs
 
 
@@ -167,5 +167,5 @@ def faiss_duplicates_topk_pairs(
     metric: str, arr: Union[np.ndarray, Iterable[np.ndarray]], topk: int, chunksize: int, progress: Progress
 ) -> np.ndarray:
     index = faiss_from_array(arr, metric)
-    pairs, dists = faiss_to_pairs(faiss_duplicates_topk(index, chunksize, topk, progress))
+    pairs, _dists = faiss_to_pairs(faiss_duplicates_topk(index, chunksize, topk, progress))
     return pairs

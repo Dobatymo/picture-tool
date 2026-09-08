@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 from numba import jit, optional
@@ -54,7 +54,7 @@ def l2squared_duplicates_topk_numba(arr: np.ndarray, topk: int, progress: Option
 
 
 def numba_duplicates_threshold_pairs(
-    metric: str, arr: np.ndarray, threshold: Union[int, float], verbose: bool = False
+    metric: str, arr: np.ndarray, threshold: float, verbose: bool = False
 ) -> np.ndarray:
     if metric == "l2-squared":
         if verbose:

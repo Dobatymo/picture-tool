@@ -20,14 +20,14 @@ def str_match(col: pd.Series, re_pattern: str) -> pd.Series:
     try:
         return ~col.str.match(re_pattern, re.IGNORECASE)
     except re.error as e:
-        raise ValueError(f"Regex error: {e}")
+        raise ValueError(f"Regex error: {e}") from e
 
 
 def str_count(col: pd.Series, re_pattern: str) -> pd.Series:
     try:
         return col.str.count(re_pattern, re.IGNORECASE)
     except re.error as e:
-        raise ValueError(f"Regex error: {e}")
+        raise ValueError(f"Regex error: {e}") from e
 
 
 def str_fnmatch(col: pd.Series, fn_pattern: str) -> pd.Series:

@@ -26,12 +26,12 @@ def dt_gps_from_exif(exif: dict) -> datetime:
     try:
         datestamp = exif["GPS"][piexif.GPSIFD.GPSDateStamp].decode("ascii")
         timestamp = exif["GPS"][piexif.GPSIFD.GPSTimeStamp]
-    except KeyError:
-        raise NoDateFound()
+    except KeyError as e:
+        raise NoDateFound() from e
     except UnicodeDecodeError:
         raise
 
-    _date = datetime.strptime(datestamp, "%Y:%m:%d")
+    _date = datetime.strptime(datestamp, "%Y:%m:%d").replace(tzinfo=timezone.utc)
     (h, hd), (m, md), (s, sd) = timestamp
     assert hd == 1 and md == 1
     s, ms = divmod(s, sd)
@@ -91,7 +91,7 @@ def add_date(
     try:
         exif = piexif.load(image.info["exif"])
     except KeyError as e:
-        raise NoDateFound(e)
+        raise NoDateFound(e) from e
 
     dt = get_original_date(exif).date()
 
@@ -136,14 +136,14 @@ def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: O
             try:
                 exif = piexif.load(kwargs["exif"])
             except KeyError as e:
-                raise RotateFailed(e)
+                raise RotateFailed(e) from e
 
             try:
                 image = fix_orientation(image, exif)
                 kwargs.update({"exif": piexif.dump(exif)})
                 modified = True
-            except ValueError:
-                raise RotateFailed()
+            except ValueError as e:
+                raise RotateFailed() from e
             except NoActionNeeded:
                 pass
 
@@ -173,7 +173,7 @@ def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: O
 def main():
     from argparse import ArgumentDefaultsHelpFormatter
 
-    from genutility.args import is_dir
+    from genutility.args import is_dir, non_negative_float, non_negative_int, positive_int
     from gooey import GooeyParser
 
     DEFAULT_QUALITY = 90
@@ -183,7 +183,7 @@ def main():
 
     parser.add_argument("--extensions", nargs="+", default=extensions_jpeg)
     parser.add_argument("-r", "--recursive", action="store_true", help="Process directory recursively.")
-    parser.add_argument("-q", "--quality", type=int, default=DEFAULT_QUALITY, help="JPEG quality level.")
+    parser.add_argument("-q", "--quality", type=non_negative_int, default=DEFAULT_QUALITY, help="JPEG quality level.")
     parser.add_argument(
         "--move", type=str, default=None, help="Move original files to this subdirectory after processing."
     )
@@ -207,16 +207,24 @@ def main():
         help="The corner alignment of the date string. TL is top left, BC is bottom center, and so on.",
     )
     parser.add_argument(
-        "-p", "--fontsize", type=float, default=FONTSIZE_DEFAULT, help="Fontsize ratio relative to the image height"
+        "-p",
+        "--fontsize",
+        type=non_negative_float,
+        default=FONTSIZE_DEFAULT,
+        help="Fontsize ratio relative to the image height",
     )
     parser.add_argument(
-        "--padding", type=float, default=PADDING_DEFAULT, help="Padding ratio relative to the image size"
+        "--padding", type=non_negative_float, default=PADDING_DEFAULT, help="Padding ratio relative to the image size"
     )
     parser.add_argument("--fill", default=FILL_DEFAULT, help="Font fill color")
     parser.add_argument("--outline", default=OUTLINE_DEFAULT, help="Font outline color")
     # parser.add_argument("--maxsize", metavar=("W", "H"), nargs=2, type=int, help="Downsize so the images dimensions don't exceed W x H")  # fails with Gooey
     parser.add_argument(
-        "--maxsize", metavar="W H", nargs=2, type=int, help="Downsize so the images dimensions don't exceed W x H"
+        "--maxsize",
+        metavar="W H",
+        nargs=2,
+        type=positive_int,
+        help="Downsize so the images dimensions don't exceed W x H",
     )
     args = parser.parse_args()
 

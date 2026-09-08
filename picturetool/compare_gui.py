@@ -226,9 +226,9 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
             return (result.name.item(), result["path"], result["checked"].item(), result["priority"].item(), result)
 
         except IndexError:
-            raise IndexError("File was first/last in group")
+            raise IndexError("File was first/last in group") from None
         except KeyError:
-            raise IndexError("Group was first/last in list")
+            raise IndexError("Group was first/last in list") from None
 
     # required by Qt
 
@@ -243,16 +243,12 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
             if section == 0:
                 if role == QtCore.Qt.DisplayRole:
                     return self.df.index.name
-                elif role == QtCore.Qt.ToolTipRole:
-                    return f"Sort by {self.df.index.name}"
-                elif role == QtCore.Qt.StatusTipRole:
+                elif role == QtCore.Qt.ToolTipRole or role == QtCore.Qt.StatusTipRole:
                     return f"Sort by {self.df.index.name}"
             else:
                 if role == QtCore.Qt.DisplayRole:
                     return self.df.columns[section - 1]
-                elif role == QtCore.Qt.ToolTipRole:
-                    return f"Sort {self.df.index.name} by {self.df.columns[section - 1]} of reference file"
-                elif role == QtCore.Qt.StatusTipRole:
+                elif role == QtCore.Qt.ToolTipRole or role == QtCore.Qt.StatusTipRole:
                     return f"Sort {self.df.index.name} by {self.df.columns[section - 1]} of reference file"
 
         return None
@@ -445,7 +441,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
     @staticmethod
     def get_dtypefuncs(functions: Dict[Tuple[type, str], Callable]) -> Dict[type, List[str]]:
         dtypefuncs = defaultdict(list)
-        for dtype, name in functions.keys():
+        for dtype, name in functions:
             dtypefuncs[dtype].append(name)
         return dict(dtypefuncs)
 
@@ -524,7 +520,7 @@ class PrioritizeWidget(QtWidgets.QWidget):
             col = command["column"]
             strfunc = command["function"]
             args = command["args"]
-            ascending = True if command["order"] == "Ascending" else False  # noqa: F841
+            ascending = command["order"] == "Ascending"
 
             dtype = type(self.df.dtypes[self.df.columns.get_loc(col)])
             func = functions[(dtype, strfunc)]

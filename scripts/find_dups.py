@@ -34,7 +34,7 @@ import msgpack
 import numpy as np
 import piexif
 import requests
-from genutility.args import is_dir, suffix_lower
+from genutility.args import is_dir, non_negative_int, positive_int, suffix_lower
 from genutility.datetime import datetime_from_utc_timestamp_ns
 from genutility.file import StdoutFile
 from genutility.filesdb import NoResult
@@ -260,9 +260,9 @@ class wrap:
         except UnidentifiedImageError:
             raise  # inherits from OSError, so must be re-raised explicitly
         except OSError as e:
-            raise ImageError(path, e)
+            raise ImageError(path, e) from e
         except ValueError as e:
-            raise ImageError(path, e)
+            raise ImageError(path, e) from e
 
         out = {
             self.hash.get_col(): hash_bytes,
@@ -293,7 +293,7 @@ class wrap_with_db(wrap):
                 values = self.db.get(path, only=self.only)
             except OverflowError as e:
                 logging.error("Failed to query hash cache database for <%s>. OverflowError: %s", path, e)
-                raise NoResult
+                raise NoResult from e
             meta = dict(zip(self.only, values))
             if any(meta[col] is None for col in self._get_non_optional_cols()):
                 raise NoResult
@@ -680,24 +680,28 @@ def main() -> None:
         "--resolution-normalized",
         metavar="N",
         nargs=2,
-        type=int,
+        type=positive_int,
         default=DEFAULT_NORMALIZED_RESOLUTION,
         help="All pictures will be resized to this resolution prior to comparison. It should be smaller than the smallest picture in one duplicate group. If it's smaller, more differences in image details will be ignored.",
     )
     parser.add_argument(
         "--hamming-threshold",
         metavar="N",
-        type=int,
+        type=non_negative_int,
         default=DEFAULT_HAMMING_THRESHOLD,
         help="Maximum distance of semantic hashes which use the hamming metric",
     )
     parser.add_argument(
-        "--parallel-read", metavar="N", type=int, default=DEFAULT_PARALLEL_READ, help="Default read concurrency"
+        "--parallel-read",
+        metavar="N",
+        type=positive_int,
+        default=DEFAULT_PARALLEL_READ,
+        help="Default read concurrency",
     )
     parser.add_argument(
         "--chunksize",
         metavar="N",
-        type=int,
+        type=positive_int,
         default=2000,
         help="Specifies the number of hashes to compare at the same the time. Larger chunksizes require more memory.",
     )

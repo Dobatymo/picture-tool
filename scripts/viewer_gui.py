@@ -14,6 +14,8 @@ APP_AUTHOR = "Dobatymo"
 APP_NAME = "picture-viewer"
 APP_PIPE_NAME = rf"\\.\pipe\{APP_AUTHOR}-{APP_NAME}"
 
+logger = logging.getLogger(__name__)
+
 
 def try_send(name: str, msg: Optional[dict]) -> None:
     if os.path.exists(name):
@@ -75,7 +77,7 @@ def main():
     from picturetool.viewer_gui import PictureWindow, PyServer, WindowManager
 
     def excepthook(exc_type, value, traceback):
-        logging.exception("Unhandled exception", exc_info=(exc_type, value, traceback))
+        logger.exception("Unhandled exception", exc_info=(exc_type, value, traceback))
 
     class MyWindowManager(WindowManager):
         @QtCore.Slot()
@@ -121,9 +123,9 @@ def main():
     ret = app.exec_()
     s.stop()
     if not s.wait(1000):
-        logging.error("Background thread failed to exit in time")
+        logger.error("Background thread failed to exit in time")
 
-    logging.debug("App exit code: %d", ret)
+    logger.debug("App exit code: %d", ret)
     sys.exit(ret)
 
 

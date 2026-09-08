@@ -4,7 +4,7 @@ import multiprocessing
 import os
 import platform
 import re
-import subprocess  # nosec
+import subprocess
 import sys
 import threading
 from datetime import datetime, timedelta, tzinfo
@@ -250,7 +250,7 @@ def buffer_fill(it: Iterable[bytes], buffer: memoryview) -> None:
 def npmp_duplicates_threshold_pairs(
     metric: str,
     hashes: Union[np.ndarray, List[bytes]],
-    threshold: Union[int, float],
+    threshold: float,
     chunksize: int,
     progress: Optional[Progress] = None,
 ) -> np.ndarray:
@@ -326,7 +326,7 @@ def npmp_duplicates_topk_pairs(
 
 
 def npmt_duplicates_threshold_pairs(
-    metric: str, hashes: np.ndarray, threshold: Union[int, float], chunksize: int, progress: Optional[Progress] = None
+    metric: str, hashes: np.ndarray, threshold: float, chunksize: int, progress: Optional[Progress] = None
 ) -> np.ndarray:
     # npmp.THREADPOOL_LIMIT = limit
 
@@ -501,7 +501,8 @@ def make_datetime(date: bytes, subsec: Optional[bytes] = None, offset: Optional[
         m = re.match(r"(\d+)[:-](\d+)[:-](\d+) (\d+):(\d+):(\d+)", date_str)
         if m:
             timetuple = tuple(map(int, m.groups()))
-            dt = datetime(*timetuple)  # type: ignore[arg-type]
+            # EXIF without an offset represents an unknown timezone.
+            dt = datetime(*timetuple)  # type: ignore[arg-type]  # noqa: DTZ001
         else:
             raise ValueError(f"time data '{date_str}' does not match '%Y:%m:%d %H:%M:%S' or '%Y-%m-%d %H:%M:%S'")
 
@@ -538,9 +539,8 @@ def get_exif_dates(exif: dict) -> Dict[str, datetime]:
 
     out: Dict[str, datetime] = {}
 
-    for field in d.keys():
+    for field, (date_idx, offet_idx, subsec_idx) in d.items():
         try:
-            date_idx, offet_idx, subsec_idx = d[field]
             date = exif[m1[date_idx[0]]][getattr(m2[date_idx[0]], date_idx[1])]
             subsec = exif[m1[subsec_idx[0]]].get(getattr(m2[subsec_idx[0]], subsec_idx[1]), None)
             offset = exif[m1[offet_idx[0]]].get(getattr(m2[offet_idx[0]], offet_idx[1]), None)
@@ -674,18 +674,22 @@ def show_in_file_manager(path: str) -> None:
     if platform.system() == "Windows":
         path = to_dos_path(path)
         args = f'explorer /select,"{path}"'
-        subprocess.run(args)  # nosec
+        # Intentional Explorer launch without a shell; its exit status is not useful here.
+        subprocess.run(args, check=False)  # noqa: S603
     else:
         raise RuntimeError("Önly windows implemented")
 
 
 def open_using_default_app(path: str) -> None:
     if platform.system() == "Windows":  # Windows
-        os.startfile(path)  # nosec
+        # Opening the user-selected file with its associated application is intentional.
+        os.startfile(path)  # noqa: S606
     elif platform.system() == "Darwin":  # macOS
-        subprocess.call(["open", path])  # nosec
+        # Resolve the desktop opener via PATH; pass the file as a separate argument without a shell.
+        subprocess.call(["open", path])  # noqa: S603, S607
     else:  # Linux variants
-        subprocess.call(["xdg-open", path])  # nosec
+        # Resolve the desktop opener via PATH; pass the file as a separate argument without a shell.
+        subprocess.call(["xdg-open", path])  # noqa: S603, S607
 
 
 class QueueListenerContext(logging.handlers.QueueListener):

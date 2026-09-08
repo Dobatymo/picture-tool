@@ -13,9 +13,8 @@ from operator import itemgetter
 from pathlib import Path
 from queue import Full, Queue
 from threading import Lock, Thread
-from typing import Any, Callable
+from typing import Any, Callable, Deque, Dict, Generic, List, NamedTuple, Optional, Sequence, Set, Tuple, Type, TypeVar
 from typing import Counter as CounterT
-from typing import Deque, Dict, Generic, List, NamedTuple, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 import humanize
 from genutility.time import MeasureTime
@@ -239,7 +238,7 @@ class PictureCache(QtCore.QObject):
             self.pic_load_skipped.emit(path, frame)
             return
         else:
-            assert False  # noqa: B011
+            assert False
 
         try:
             image = future.result()
@@ -371,7 +370,7 @@ class WindowManager(Generic[T]):
 class BeepThread(Thread):
     def __init__(self) -> None:
         super().__init__(daemon=True)
-        self.q: "Queue[Tuple[int, float]]" = Queue(maxsize=2)
+        self.q: Queue[Tuple[int, float]] = Queue(maxsize=2)
         self.start()
 
     def run(self) -> None:
@@ -1002,7 +1001,7 @@ class PictureWindow(QtWidgets.QMainWindow):
     @lru_cache(1000)
     def get_location(cls, lat: Sequence[Fraction], lon: Sequence[Fraction]) -> Optional[str]:
         assert cls.rg is not None
-        coords, distance, city = cls.rg.lat_lon(gps_dms_to_dd(lat), gps_dms_to_dd(lon), "degrees")
+        _coords, _distance, city = cls.rg.lat_lon(gps_dms_to_dd(lat), gps_dms_to_dd(lon), "degrees")
         return city.name
 
     def make_cam_info_string(self, meta: Dict[str, Any]) -> str:
@@ -1041,7 +1040,7 @@ class PictureWindow(QtWidgets.QMainWindow):
         try:
             func(path, idx, *args)
         except Exception:
-            logger.exception("Failed to run user event %s", func, args)
+            logger.exception("Failed to run user event %s with args %r", func, args)
 
     # signal handlers
 

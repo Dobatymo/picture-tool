@@ -13,6 +13,8 @@ from genutility.filesystem import scandir_ext
 
 from picturetool.utils import Max, extensions_jpeg, get_exif_dates, with_stem
 
+logger = logging.getLogger(__name__)
+
 modelmap = {
     b"iPhone SE (2nd generation)": "iPhone SE 2",
 }
@@ -88,7 +90,7 @@ def main() -> None:
                 try:
                     key = items[args.group_by]
                 except KeyError:
-                    logging.critical(f"Group key `{args.group_by}` not available for file <{path.name}>")
+                    logger.critical(f"Group key `{args.group_by}` not available for file <{path.name}>")
                     sys.exit(1)
 
             grouped[key][path] = items
@@ -112,7 +114,7 @@ def main() -> None:
         try:
             _files = sorted(((path, items) for path, items in files.items()), key=keyfunc)
         except KeyError:
-            logging.critical(f"Sort key `{args.sort_by}` not available for file <{path.name}>")
+            logger.critical(f"Sort key `{args.sort_by}` not available for file <{path.name}>")
             sys.exit(1)
 
         for i, (path, items) in enumerate(_files):

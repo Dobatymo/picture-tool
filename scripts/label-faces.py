@@ -67,7 +67,7 @@ def crop(img: RawImage, loc: Location, context: Tuple[int, int, int, int] = (0, 
     top, right, bottom, left = loc  # face_recognition style
     to, ri, bo, le = context
 
-    height, width, channels = img.shape
+    height, width, _channels = img.shape
 
     top = max(0, top - to)
     right = min(width, right + ri)
@@ -124,12 +124,12 @@ class FaceStorage:
         return self._closest(self._encodings, encoding)
 
     def is_unknown(self, encoding: Encoding) -> bool:
-        a, b = self._closest(self._unknown, encoding)
-        return bool(a)
+        sure, _suggest = self._closest(self._unknown, encoding)
+        return bool(sure)
 
     def is_skipped(self, encoding: Encoding) -> bool:
-        a, b = self._closest(self._skipped, encoding)
-        return bool(a)
+        sure, _suggest = self._closest(self._skipped, encoding)
+        return bool(sure)
 
     def get_names(self, indices: Iterable[int]) -> List[str]:
         return [self._names[i] for i in indices]
@@ -251,7 +251,7 @@ def label(paths: Iterable[PathType], fdb: FaceStorage, vdb: VectorStorage) -> No
 if __name__ == "__main__":
     from argparse import ArgumentParser
 
-    from genutility.args import is_dir
+    from genutility.args import is_dir, non_negative_float
 
     DEFAULT_STRICT_BOUND = 0.1
     DEFAULT_SUGGEST_BOUND = 0.5
@@ -260,9 +260,9 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument("path", type=is_dir, help="Input path to scan for images")
-    parser.add_argument("--strict", type=float, default=DEFAULT_STRICT_BOUND)
+    parser.add_argument("--strict", type=non_negative_float, default=DEFAULT_STRICT_BOUND)
     parser.add_argument("--extensions", nargs="+", default=extensions_images, help="List of file extensions to scan")
-    parser.add_argument("--suggest", type=float, default=DEFAULT_SUGGEST_BOUND)
+    parser.add_argument("--suggest", type=non_negative_float, default=DEFAULT_SUGGEST_BOUND)
     parser.add_argument("--faces-db", type=Path, default=DEFAULT_FACES_DB)
     parser.add_argument("--vector-db", type=Path, default=DEFAULT_VECTOR_DB)
     parser.add_argument("-r", "--recursive", action="store_true", help="Scan directory recursively")
