@@ -1,11 +1,11 @@
 import json
 import logging
 import os.path
+from ast import literal_eval
 from collections import defaultdict
 from datetime import timedelta, timezone
 from functools import lru_cache, partial
 from inspect import signature
-from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -24,7 +24,6 @@ from .prioritize import functions
 from .shared_gui import PixmapViewer, read_qt_pixmap
 from .utils import (
     SortValuesKwArgs,
-    cumsum,
     open_using_default_app,
     pd_sort_groups_by_first_row,
     pd_sort_within_group,
@@ -37,14 +36,11 @@ QT_DEFAULT_WINDOW_FLAGS = QtCore.Qt.WindowFlags()
 
 
 def get_priorities(df: pd.DataFrame) -> np.ndarray:
-    return pd.Series(
-        list(chain.from_iterable(range(i) for i in df.groupby("group").count()["path"])), dtype="int32"
-    ).values
+    return df.groupby("group", sort=False).cumcount().to_numpy(dtype="int32")
 
 
 def set_reference_unchecked(df: pd.DataFrame) -> None:
-    idx = cumsum(df.groupby("group").count()["path"].values)
-    df.iloc[idx, df.columns.get_loc("checked")] = False
+    df.loc[df["priority"] == 0, "checked"] = False
 
 
 def slice_to_list(value: slice) -> list:
@@ -55,7 +51,7 @@ def iloc_by_index_and_bool(df: pd.DataFrame, index: int, bool_idx: pd.Series) ->
     if bool_idx.dtype != "bool":
         raise TypeError(f"bool_idx must be a 'bool' series, not '{bool_idx.dtype}'")
 
-    ilocs = np.array(slice_to_list(df.index.get_loc(index)))[bool_idx]
+    ilocs = np.flatnonzero(df.index == index)[bool_idx]
     assert len(ilocs) == 1
     return ilocs[0].item()
 
@@ -98,12 +94,6 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
 
         if "overwrite" not in df:
             df["overwrite"] = pd.Series([{} for i in range(len(df))], dtype=object).values
-        else:
-            from ast import literal_eval
-
-            df["overwrite"] = df["overwrite"].apply(
-                literal_eval
-            )  # json.loads would be better, but to_csv also doesn't use json
 
         self.set_df(df)
 
@@ -115,7 +105,7 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         return self.df.iloc[row_idx]
 
     def get_group(self, group: int) -> pd.DataFrame:
-        return self.df.loc[group]
+        return self.df.loc[[group]]
 
     def get_group_by_row_idx(self, row_idx: int) -> pd.DataFrame:
         group = self.df.index[row_idx]
@@ -140,13 +130,13 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         row = self.df.iloc[row_idx]
         group = row.name.item()
 
-        self.df.loc[group].iloc[0]["overwrite"][name] = row[name]
+        self.get_group(group).iloc[0]["overwrite"][name] = row[name]
 
     def set_overwrite(self, row_idx: int, name: str, val: Any) -> None:
         self.df.iloc[row_idx]["overwrite"][name] = val
 
     def _get_iloc_by(self, group: int, key: str, value: Any) -> int:
-        idx = (self.df.loc[group][key] == value).astype("bool")  # without the cast it's 'boolean'
+        idx = (self.get_group(group)[key] == value).astype("bool")  # without the cast it's 'boolean'
         return iloc_by_index_and_bool(self.df, group, idx)
 
     def set_checked_by_file(self, group: int, path: str, checked: bool) -> None:
@@ -180,8 +170,8 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
         self.dataChanged.emit(index, index)
 
     def get_group_max_size(self, group: int) -> Optional[Tuple[int, int]]:
-        w = self.df.loc[group]["width"].max()
-        h = self.df.loc[group]["height"].max()
+        w = self.get_group(group)["width"].max()
+        h = self.get_group(group)["height"].max()
         if w is pd.NA or h is pd.NA:
             return None
         else:
@@ -195,31 +185,35 @@ class GroupedPictureModel(QtCore.QAbstractTableModel):
                 if result.name.item() != group:
                     raise IndexError("File was last in group")
             elif mode == "prev-in-group":
+                if row == 0:
+                    raise IndexError("File was first in group")
                 result = self.df.iloc[row - 1]
                 if result.name.item() != group:
                     raise IndexError("File was first in group")
             elif mode == "first-in-group":
-                result = self.df.loc[group].iloc[0]
+                result = self.get_group(group).iloc[0]
                 if result["path"] == path:
                     raise IndexError("File was first in group")
             elif mode == "last-in-group":
-                result = self.df.loc[group].iloc[-1]
+                result = self.get_group(group).iloc[-1]
                 if result["path"] == path:
                     raise IndexError("File was last in group")
-            elif mode == "next-group":
-                result = self.df.loc[group + 1].iloc[0]
-            elif mode == "prev-group":
-                result = self.df.loc[group - 1].iloc[0]
+            elif mode in ("next-group", "prev-group"):
+                groups = self.df.index.unique()
+                group_idx = groups.get_loc(group) + (1 if mode == "next-group" else -1)
+                if group_idx < 0 or group_idx >= len(groups):
+                    raise IndexError("Group was first/last in list")
+                result = self.get_group(groups[group_idx]).iloc[0]
             elif mode == "first-group":
                 first_group = self.df.index[0]
                 if first_group == group:
                     raise IndexError("File was first in group")
-                result = self.df.loc[first_group].iloc[0]
+                result = self.get_group(first_group).iloc[0]
             elif mode == "last-group":
                 last_group = self.df.index[-1]
                 if last_group == group:
                     raise IndexError("File was first in group")
-                result = self.df.loc[last_group].iloc[0]
+                result = self.get_group(last_group).iloc[0]
             else:
                 raise ValueError(f"Invalid mode: {mode}")
 
@@ -885,6 +879,9 @@ class TableWidget(QtWidgets.QWidget):
                     "checked": "bool",
                 },
             )
+            if "overwrite" in df:
+                # to_csv serializes dictionaries as Python literals, not JSON.
+                df["overwrite"] = df["overwrite"].apply(literal_eval)
             df = df.convert_dtypes(infer_objects=False)
             date_cols = list({c for c in df.columns if "date" in c} - {"mod_date"})
             for col in date_cols:
@@ -894,6 +891,8 @@ class TableWidget(QtWidgets.QWidget):
             df = pd.read_parquet(path).reset_index()
         elif path.endswith(".json"):
             df = pd.read_json(path, orient="table")
+            if df.index.name == "group":
+                df = df.reset_index()
         else:
             raise ValueError(f"Invalid file extension: {path}")
 

@@ -752,6 +752,10 @@ class PictureWindow(QtWidgets.QMainWindow):
         lat = meta.get("gps-lat")
         lon = meta.get("gps-lon")
         if lat and lon:
+            if meta.get("gps-lat-ref") == "S":
+                lat = tuple(-component for component in lat)
+            if meta.get("gps-lon-ref") == "W":
+                lon = tuple(-component for component in lon)
             return GpsDms(lat, lon)
         else:
             raise ValueError("GPS not available")

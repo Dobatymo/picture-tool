@@ -34,8 +34,8 @@ def dt_gps_from_exif(exif: dict) -> datetime:
     _date = datetime.strptime(datestamp, "%Y:%m:%d").replace(tzinfo=timezone.utc)
     (h, hd), (m, md), (s, sd) = timestamp
     assert hd == 1 and md == 1
-    s, ms = divmod(s, sd)
-    _time = time(h, m, s, ms * 1000)
+    s, remainder = divmod(s, sd)
+    _time = time(h, m, s, remainder * 1000000 // sd)
 
     return datetime.combine(_date, _time, timezone.utc)
 
@@ -116,7 +116,7 @@ def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: O
         "optimize": True,
         "progressive": image.info.get("progression", False),
         "icc_profile": image.info.get("icc_profile"),
-        "exif": image.info.get("exif"),
+        "exif": image.info.get("exif") or b"",
     }
     modified = False
 
@@ -126,11 +126,11 @@ def mod_image(inpath: Path, outpath: Path, args: Any, quality: int = 90, move: O
             modified = True
 
         if args.add_date:  # implies rotate
-            image, kwargs = add_date(image, args.align, args.fontsize, args.padding, args.fill, args.outline)
-            kwargs.update(kwargs)
+            image, date_kwargs = add_date(image, args.align, args.fontsize, args.padding, args.fill, args.outline)
+            kwargs.update(date_kwargs)
             modified = True
 
-        elif args.rotate:
+        elif args.rotate and kwargs["exif"]:
             # warning: this is not lossless
 
             try:

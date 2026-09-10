@@ -310,7 +310,9 @@ def read_qt_image(
                     "focal-length": piexif_get(exif, "Exif", piexif.ExifIFD.FocalLength, "rational"),
                     "iso": piexif_get(exif, "Exif", piexif.ExifIFD.ISOSpeedRatings, "int"),
                     "gps-lat": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitude, "tuple-of-rational"),
+                    "gps-lat-ref": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLatitudeRef, "ascii"),
                     "gps-lon": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitude, "tuple-of-rational"),
+                    "gps-lon-ref": piexif_get(exif, "GPS", piexif.GPSIFD.GPSLongitudeRef, "ascii"),
                 }
             )
             meta.update(get_exif_dates(exif))
@@ -713,9 +715,9 @@ def _fix_thumbnail(
             img.thumbnail((160, 120), Image.Resampling.LANCZOS)
             exif["thumbnail"] = turbojpeg.compress(np.array(img), 90, turbojpeg.SAMP.Y420)
 
-        with BytesIO() as out:
-            piexif.insert(piexif.dump(exif), data, out)
-            data = out.getvalue()
+    with BytesIO() as out:
+        piexif.insert(piexif.dump(exif), data, out)
+        data = out.getvalue()
 
     return data
 
