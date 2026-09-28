@@ -17,8 +17,10 @@ from genutility.time import MeasureTime
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
+    from PySide6.QtGui import QAction
 except ImportError:
     from PySide2 import QtCore, QtGui, QtWidgets
+    from PySide2.QtWidgets import QAction
 
 from .prioritize import functions
 from .shared_gui import PixmapViewer, read_qt_pixmap
@@ -374,20 +376,20 @@ class GroupedPictureView(QtWidgets.QTableView):
         row = self.get_row_by_index(index)
         is_reference = row["priority"] == 0
 
-        open_image_compare_action = QtWidgets.QAction("Open image compare", self)
+        open_image_compare_action = QAction("Open image compare", self)
         open_image_compare_action.triggered.connect(lambda checked: self.activated.emit(index))
 
-        open_file_action = QtWidgets.QAction("Open file", self)
+        open_file_action = QAction("Open file", self)
         open_file_action.triggered.connect(lambda checked: self.open_file(index))
 
-        open_directory_action = QtWidgets.QAction("Open directory", self)
+        open_directory_action = QAction("Open directory", self)
         open_directory_action.triggered.connect(lambda checked: self.open_directory(index))
 
-        reference_action = QtWidgets.QAction("Make reference", self)
+        reference_action = QAction("Make reference", self)
         reference_action.setEnabled(not is_reference)
         reference_action.triggered.connect(lambda checked: self.make_reference(index))
 
-        path_reference_action = QtWidgets.QAction("Set path reference", self)
+        path_reference_action = QAction("Set path reference", self)
         path_reference_action.triggered.connect(lambda checked: self.set_col_reference(index, "path"))
 
         contextMenu = QtWidgets.QMenu(self)
@@ -411,7 +413,7 @@ class GroupedPictureView(QtWidgets.QTableView):
             _menu = contextMenu.addMenu(name)
             overwrite_val = row["overwrite"].get(name)
             for i, val in enumerate(series):
-                _action = QtWidgets.QAction(val, self)
+                _action = QAction(val, self)
                 _action.setCheckable(True)
                 if overwrite_val == val or (overwrite_val is None and i == row["priority"]):
                     _action.setChecked(True)
@@ -421,7 +423,7 @@ class GroupedPictureView(QtWidgets.QTableView):
 
             _text = row["overwrite"].get(name, "Custom")
             _menu.addSection("Custom")
-            _action = QtWidgets.QAction(_text, self)
+            _action = QAction(_text, self)
             _action.setCheckable(False)
             _action.triggered.connect(partial(self.set_overwrite_custom, index, name, _text))
             _menu.addAction(_action)
@@ -756,19 +758,19 @@ class PictureWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.picture)
         self.setStatusBar(self.statusbar)
 
-        button_fit_to_window = QtWidgets.QAction("&Fit to window", self)
+        button_fit_to_window = QAction("&Fit to window", self)
         button_fit_to_window.setCheckable(True)
         button_fit_to_window.setChecked(True)
         button_fit_to_window.setStatusTip("Resize picture to fit to window")
         button_fit_to_window.triggered[bool].connect(self.on_fit_to_window)
 
-        button_stay_on_top = QtWidgets.QAction("&Stay on top", self)
+        button_stay_on_top = QAction("&Stay on top", self)
         button_stay_on_top.setCheckable(True)
         button_stay_on_top.setChecked(False)
         button_stay_on_top.setStatusTip("Have the windows always stay on top")
         button_stay_on_top.triggered[bool].connect(self.on_stay_on_top)
 
-        button_normalize_scale = QtWidgets.QAction("&Normalize scale", self)
+        button_normalize_scale = QAction("&Normalize scale", self)
         button_normalize_scale.setCheckable(True)
         button_normalize_scale.setChecked(False)
         button_normalize_scale.setStatusTip(
@@ -1009,28 +1011,28 @@ class TableWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.table)
         self.picture_window.model = self.table.model
 
-        button_open = QtWidgets.QAction("&Open", self)
+        button_open = QAction("&Open", self)
         button_open.setStatusTip("Open list of image groups")
         button_open.setShortcut(QtGui.QKeySequence.Open)
         button_open.triggered.connect(self.on_file_open)
 
-        button_save = QtWidgets.QAction("&Save", self)
+        button_save = QAction("&Save", self)
         button_save.setStatusTip("Save list of image groups with selection")
         button_save.setShortcut(QtGui.QKeySequence.Save)
         button_save.triggered.connect(self.on_file_save)
 
-        button_exit = QtWidgets.QAction("E&xit", self)
+        button_exit = QAction("E&xit", self)
         button_exit.setStatusTip("Close the application")
-        button_exit.setMenuRole(QtWidgets.QAction.QuitRole)
+        button_exit.setMenuRole(QAction.QuitRole)
         button_exit.setShortcut(QtGui.QKeySequence.Quit)
         button_exit.triggered.connect(self.close)
 
-        self.button_prioritize = QtWidgets.QAction("&Prioritize", self)
+        self.button_prioritize = QAction("&Prioritize", self)
         self.button_prioritize.setStatusTip("Sort files within groups")
         self.button_prioritize.triggered.connect(self.on_prioritize)
         self.button_prioritize.setEnabled(False)
 
-        button_fullscreen = QtWidgets.QAction("&Fullscreen", self)
+        button_fullscreen = QAction("&Fullscreen", self)
         button_fullscreen.setCheckable(True)
         button_fullscreen.setChecked(False)
         button_fullscreen.setStatusTip("Show window in fullscreen mode")
