@@ -38,7 +38,7 @@ dependencies = [
   "numpy>=1.26; python_version>='3.12'",
   "pandas>=2.0.3",
   "pandasql>=0.7.3",
-  "piexif>=1.1.3",
+  "piexif-fork>=1.1.4a1",
   "pillow>=10.4",
   "pillow-avif-plugin>=1,<1.5; python_version<'3.9'",
   "pillow-avif-plugin>=1; python_version>='3.9'",
@@ -118,13 +118,15 @@ dev = [
 ]
 
 [tool.uv]
+# piexif-fork supplies the piexif module required by transitive dependencies.
+exclude-dependencies = [ "piexif" ]
 sources.liccheck = { git = "https://github.com/dhatim/python-license-check", rev = "01bc97a8ff4237208bdfadf5801554c1a42522e0" }
 build-backend.module-name = "picturetool"
 build-backend.module-root = ""
 
 [tool.ruff]
 line-length = 120
-lint.extend-select = [ "B", "I", "S", "UP" ]
+lint.extend-select = [ "B", "C4", "DTZ", "I", "RUF100", "S", "UP" ]
 lint.ignore = [ "B011", "BLE001", "LOG015", "S101" ]
 # These executable script filenames are intentional, not importable module names.
 lint.per-file-ignores."scripts/*-*.py" = [ "N999" ]

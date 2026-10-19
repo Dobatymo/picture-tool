@@ -1,5 +1,6 @@
 import logging
 import os
+import struct
 from copy import deepcopy
 from fractions import Fraction
 from io import BytesIO
@@ -691,6 +692,27 @@ def tj_fix_orientation(img: bytes, exif: dict, perfect: bool = True) -> bytes:
     return img
 
 
+def _update_jpeg_exif(data: bytes, orientation: Optional[int], thumbnail: Optional[bytes]) -> bytes:
+    """Update Orientation and the existing thumbnail through Piexif."""
+    if orientation is not None:
+        metadata = piexif.load_bytes(data, preserve_fields=True)
+        byteorder = metadata["0th"].byteorder
+        try:
+            orientation_data = struct.pack(byteorder + "H", orientation)
+        except struct.error as e:
+            raise ValueError("Invalid EXIF orientation") from e
+        orientation_field = piexif.RawField(piexif.TYPES.Short, 1, orientation_data, byteorder)
+        data = piexif.patch_bytes(
+            data,
+            {"0th": {piexif.ImageIFD.Orientation: orientation_field}},
+            unrestricted=True,
+        )
+
+    if thumbnail is not None:
+        data = piexif.replace_thumbnail_bytes(data, thumbnail)
+    return data
+
+
 def _fix_thumbnail(
     data: bytes,
     exif: dict,
@@ -709,35 +731,23 @@ def _fix_thumbnail(
                 exif["thumbnail"] = _tj_fix_orientation(exif["thumbnail"], orientation, perfect)
             elif op is not None:
                 with TranslateTjException():
-                    exif["thumbnail"] = turbojpeg.transform(exif["thumbnail"], op, perfect)
+                    exif["thumbnail"] = turbojpeg.transform(exif["thumbnail"], op, perfect=perfect)
         except ImperfectTransform:
             img = Image.fromarray(turbojpeg.decompress(data))
             img.thumbnail((160, 120), Image.Resampling.LANCZOS)
             exif["thumbnail"] = turbojpeg.compress(np.array(img), 90, turbojpeg.SAMP.Y420)
 
-    with BytesIO() as out:
-        piexif.insert(piexif.dump(exif), data, out)
-        data = out.getvalue()
-
-    return data
+    return _update_jpeg_exif(data, 1 if orientation is not None else None, exif.get("thumbnail"))
 
 
 def jpeg_fix_orientation(data: bytes, perfect: bool = True) -> bytes:
     exif = piexif.load(data)
     try:
         orientation = exif["0th"][piexif.ImageIFD.Orientation]
-        data = _tj_fix_orientation(data, orientation, perfect)
-        exif["0th"][piexif.ImageIFD.Orientation] = 1
-
-        data = _fix_thumbnail(data, exif, orientation=orientation)
-
-    except NoActionNeeded:
-        pass
-    except KeyError:
-        pass
-    except ValueError:
-        pass
-    return data
+        transformed = _tj_fix_orientation(data, orientation, perfect)
+    except (NoActionNeeded, KeyError, ValueError):
+        return data
+    return _fix_thumbnail(transformed, exif, orientation=orientation, perfect=perfect)
 
 
 def crop_half_save(path: Path, target: str) -> None:
